@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>IGT Databook Chat</title>
+  <style>
+    :root { --bg:#0e1116; --card:#161b22; --fg:#e6edf3; --mut:#7d8590; --acc:#2f81f7; --bad:#f85149; --good:#3fb950; --bot:#1f2937; --me:#1f6feb; }
+    html,body { background:var(--bg); color:var(--fg); font-family: ui-sans-serif, -apple-system, Segoe UI, Roboto, sans-serif; margin:0; height:100%; }
+    body { display:flex; flex-direction:column; }
+    header { padding:10px 16px; border-bottom:1px solid #30363d; display:flex; gap:12px; align-items:center; }
+    header h1 { font-size:15px; margin:0; }
+    .pill { display:inline-flex; align-items:center; gap:6px; background:#21262d; border:1px solid #30363d; border-radius:999px; padding:3px 10px; font-size:12px; color:var(--mut); }
+    .pill .dot { width:8px; height:8px; border-radius:50%; background:var(--bad); }
+    .pill.ok .dot { background: var(--good); }
+    main { flex:1; overflow-y:auto; padding:16px; max-width:900px; width:100%; margin:0 auto; box-sizing:border-box; }
+    .msg { margin-bottom:14px; display:flex; flex-direction:column; }
+    .msg.me { align-items:flex-end; }
+    .msg .bubble { max-width: 80%; padding:10px 14px; border-radius:12px; white-space:pre-wrap; font-size:14px; line-height:1.4; }
+    .msg.me .bubble { background:var(--me); color:white; border-bottom-right-radius:4px; }
+    .msg.bot .bubble { background:var(--bot); border:1px solid #30363d; border-bottom-left-radius:4px; }
+    .msg .meta { font-size:11px; color:var(--mut); margin-top:4px; }
+    table { border-collapse: collapse; width:100%; font-size:12px; margin-top:8px; }
+    th, td { padding:4px 8px; border-bottom:1px solid #30363d; text-align:left; white-space:nowrap; }
+    th { background:#0d1117; }
+    details > summary { cursor:pointer; color:var(--mut); font-size:12px; margin-top:6px; }
+    code { background:#0d1117; border:1px solid #30363d; border-radius:4px; padding:2px 6px; font-size:12px; display:block; white-space:pre-wrap; margin-top:4px; }
+    footer { border-top:1px solid #30363d; padding:10px; }
+    .composer { max-width:900px; margin:0 auto; display:flex; gap:8px; }
+    .composer input { flex:1; background:#0d1117; color:var(--fg); border:1px solid #30363d; border-radius:8px; padding:10px 12px; font-size:14px; }
+    .composer button { background:var(--acc); color:white; border:none; border-radius:8px; padding:10px 16px; font-size:14px; cursor:pointer; }
+    .composer button:disabled { opacity:0.5; cursor:not-allowed; }
+    .err { color: var(--bad); }
+    .overlay { position:fixed; inset:0; background:rgba(13,17,23,0.85); display:none; align-items:center; justify-content:center; z-index:10; }
+    .overlay.show { display:flex; }
+    .card { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:24px 28px; max-width:560px; width:90%; box-shadow:0 8px 32px rgba(0,0,0,0.6); }
+    .card h2 { margin:0 0 8px 0; font-size:18px; color:var(--bad); }
+    .card p { margin:8px 0; line-height:1.5; }
+    .card code, .card .path { background:#0d1117; border:1px solid #30363d; border-radius:6px; padding:2px 6px; font-family:Consolas,monospace; font-size:12px; word-break:break-all; }
+    .card .path { display:block; padding:8px 10px; margin:6px 0; user-select:all; }
+    .card ol { margin:8px 0; padding-left:22px; }
+    .card .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
+    .card .actions button, .card .actions a.btn { background:var(--acc); color:#fff; border:none; border-radius:8px; padding:9px 14px; font-size:13px; cursor:pointer; text-decoration:none; display:inline-block; }
+    .card .actions button.secondary, .card .actions a.btn.secondary { background:#30363d; }
+    .card .toast { color:var(--ok); font-size:12px; margin-left:6px; opacity:0; transition:opacity 0.2s; }
+    .card .toast.show { opacity:1; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>IGT Databook Chat</h1>
+  <span id="health" class="pill"><span class="dot"></span><span id="healthText">Checking agent...</span></span>
+  <span class="pill" id="llmPill" style="display:none;"></span>
+  <span style="flex:1;"></span>
+  <span class="pill" id="userPill" style="display:none;"></span>
+</header>
+
+<main id="chat">
+  <div class="msg bot"><div class="bubble">Hi - ask me about IGT components in plain English. Examples:
+  - 0603 1% 4.7k resistor
+  - 0.1uF 50V 0402 cap
+  - SRV05-4 ESD protection
+  - SOT-23-3 schottky diode
+
+The agent searches DxDatabook (read-only) and returns matches.</div></div>
+</main>
+
+<footer>
+  <div class="composer">
+    <input id="input" type="text" placeholder="Describe the part you need..." autocomplete="off" disabled />
+    <button id="send" disabled>Send</button>
+  </div>
+</footer>
+
+<div id="agentDown" class="overlay">
+  <div class="card">
+    <h2>Agent isn't running on this PC</h2>
+    <p>The chat page needs the local DatabookAgent (PowerShell) running on <code>localhost:5005</code> to reach DxDatabook. Pick the easiest option:</p>
+    <ol>
+      <li><strong>From the Mentor library share</strong> &mdash; right-click <code>Start-DatabookAgent.ps1</code> &rarr; <em>Run with PowerShell</em>:
+        <span class="path" id="sharePath">Z:\LIBRARY\MentorGraphics\DatabookAgent\Start-DatabookAgent.ps1</span></li>
+      <li><strong>Or paste this command</strong> into a Run dialog (Win+R) or PowerShell prompt:
+        <span class="path" id="launchCmd">powershell.exe -NoProfile -ExecutionPolicy Bypass -File "Z:\LIBRARY\MentorGraphics\DatabookAgent\Start-DatabookAgent.ps1"</span></li>
+    </ol>
+    <div class="actions">
+      <button id="copyCmd">Copy launch command<span class="toast" id="copyToast">copied</span></button>
+      <button class="secondary" id="copyPath">Copy share path<span class="toast" id="copyPathToast">copied</span></button>
+      <button class="secondary" id="retryHealth">Retry</button>
+    </div>
+    <p style="font-size:12px;color:var(--muted);margin-top:12px;">Browsers cannot start a local program automatically &mdash; this is a one-time-per-session click. Once the agent is running, this dialog closes on its own. <strong>Why .ps1 and not a .bat?</strong> AppLocker blocks .cmd/.bat from user folders; PowerShell scripts run through System32's signed <code>powershell.exe</code>, which is allowed.</p>
+  </div>
+</div>
+
+<script>
+const AGENT = 'http://localhost:5005';
+const chat = document.getElementById('chat');
+const input = document.getElementById('input');
+const sendBtn = document.getElementById('send');
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]); });
+}
+
+function addMsg(role, htmlContent, meta) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  let inner = '<div class="bubble">' + htmlContent + '</div>';
+  if (meta) inner += '<div class="meta">' + escapeHtml(meta) + '</div>';
+  div.innerHTML = inner;
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+  return div;
+}
+
+async function checkHealth() {
+  const pill = document.getElementById('health');
+  const txt  = document.getElementById('healthText');
+  const userPill = document.getElementById('userPill');
+  const llmPill  = document.getElementById('llmPill');
+  try {
+    const r = await fetch(AGENT + '/health', { cache:'no-store' });
+    if (!r.ok) throw new Error();
+    const j = await r.json();
+    pill.classList.add('ok');
+    txt.textContent = 'Agent connected';
+    userPill.style.display = 'inline-flex';
+    userPill.textContent = j.user;
+    llmPill.style.display = 'inline-flex';
+    if (j.llmEnabled) {
+      llmPill.textContent = 'LLM: ' + (j.llmModel || 'on');
+      llmPill.classList.add('ok');
+      llmPill.title = 'LLM probe OK at ' + (j.llmCheckedAt || '');
+    } else if (j.llmConfigured) {
+      llmPill.textContent = 'LLM: error - ' + (j.llmError || 'unknown');
+      llmPill.classList.remove('ok');
+      llmPill.title = 'Token configured but the LLM probe failed. Renew at github.com/settings/personal-access-tokens';
+    } else {
+      llmPill.textContent = 'LLM: off (rules only)';
+      llmPill.classList.remove('ok');
+      llmPill.title = 'No token configured. Add agent\\.env to enable LLM parsing.';
+    }
+    input.disabled = false; sendBtn.disabled = false;
+    healthFailCount = 0;
+    hideAgentDown();
+    return true;
+  } catch (e) {
+    pill.classList.remove('ok');
+    txt.textContent = 'Agent not running - run start.cmd';
+    input.disabled = true; sendBtn.disabled = true;
+    healthFailCount = (healthFailCount || 0) + 1;
+    if (healthFailCount >= 2) showAgentDown();
+    return false;
+  }
+}
+
+let healthFailCount = 0;
+const overlay = document.getElementById('agentDown');
+function showAgentDown(){ overlay.classList.add('show'); }
+function hideAgentDown(){ overlay.classList.remove('show'); }
+
+document.getElementById('retryHealth').onclick = function(){ checkHealth(); };
+function copyToClipboard(text, toastId){
+  navigator.clipboard.writeText(text).then(function(){
+    const t = document.getElementById(toastId);
+    if (!t) return;
+    t.classList.add('show');
+    setTimeout(function(){ t.classList.remove('show'); }, 1500);
+  });
+}
+document.getElementById('copyCmd').onclick = function(){
+  copyToClipboard(document.getElementById('launchCmd').textContent, 'copyToast');
+};
+document.getElementById('copyPath').onclick = function(){
+  copyToClipboard(document.getElementById('sharePath').textContent, 'copyPathToast');
+};
+
+function rowsTable(rows) {
+  if (!rows || !rows.length) return '';
+  const cols = Object.keys(rows[0]);
+  const head = '<tr>' + cols.map(c => '<th>' + escapeHtml(c) + '</th>').join('') + '</tr>';
+  const body = rows.slice(0, 25).map(r =>
+    '<tr>' + cols.map(c => '<td>' + escapeHtml(r[c]) + '</td>').join('') + '</tr>'
+  ).join('');
+  return '<details open><summary>' + rows.length + ' row(s)</summary><table>' + head + body + '</table></details>';
+}
+
+async function ask(text) {
+  addMsg('me', escapeHtml(text));
+  const placeholder = addMsg('bot', '<i>Searching DxDatabook...</i>');
+  try {
+    const r = await fetch(AGENT + '/chat', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ message: text })
+    });
+    const j = await r.json();
+    let html = '';
+    if (j.error) {
+      html = '<span class="err">Error: ' + escapeHtml(j.error) + '</span>';
+    } else {
+      html = escapeHtml(j.reply || '(no reply)').replace(/\n/g,'<br>');
+      if (j.rows && j.rows.length) html += rowsTable(j.rows);
+      if (j.sql) html += '<details><summary>SQL</summary><code>' + escapeHtml(j.sql) + '</code></details>';
+    }
+    placeholder.innerHTML = '<div class="bubble">' + html + '</div>' +
+      (j.parsedBy ? '<div class="meta">parsed by: ' + j.parsedBy +
+        (j.llmError ? ' &bull; LLM error: ' + escapeHtml(j.llmError) : '') +
+        (j.truncated ? ' &bull; result truncated' : '') + '</div>' : '');
+    chat.scrollTop = chat.scrollHeight;
+  } catch (e) {
+    placeholder.innerHTML = '<div class="bubble"><span class="err">Network error: ' + escapeHtml(e.message) + '</span></div>';
+  }
+}
+
+sendBtn.onclick = function() {
+  const t = input.value.trim();
+  if (!t) return;
+  input.value = '';
+  ask(t);
+};
+input.addEventListener('keydown', function(e){ if (e.key === 'Enter') sendBtn.click(); });
+
+checkHealth();
+setInterval(checkHealth, 10000);
+</script>
+</body>
+</html>

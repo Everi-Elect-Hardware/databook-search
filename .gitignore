@@ -1,0 +1,6 @@
+# Local secrets - never commit
+.env
+*.token
+
+# Build/distribution artifact - regenerated from agent/
+Z-DROP/
