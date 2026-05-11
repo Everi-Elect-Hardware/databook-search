@@ -541,10 +541,22 @@ function pickColumns(rows) {
   // Build the most informative column order from what's available.
   const all = new Set();
   rows.forEach(r => Object.keys(r).forEach(k => all.add(k)));
-  const preferred = ['IGTPartNo','Description','Value','Voltage','Tolerance','PKG_TYPE','Package','Type','SubType','Device','State'];
+  const preferred = ['IGTPartNo','Description','Value','Voltage','Tolerance','PKG_TYPE','Package','Type','SubType','Device','State','Datasheet'];
   const cols = preferred.filter(c => all.has(c));
   // Drop columns that are entirely empty in this group.
   return cols.filter(c => rows.some(r => r[c] !== null && r[c] !== '' && r[c] !== undefined));
+}
+
+function renderCell(col, val) {
+  if (val == null || val === '') return '';
+  const s = String(val);
+  // Render Datasheet (and any URL-looking value) as a clickable link.
+  if (col === 'Datasheet' || /^https?:\/\//i.test(s)) {
+    if (/^https?:\/\//i.test(s)) {
+      return '<a href="' + escapeHtml(s) + '" target="_blank" rel="noopener">open &raquo;</a>';
+    }
+  }
+  return escapeHtml(s);
 }
 
 function groupTable(group, openByDefault) {
@@ -554,7 +566,7 @@ function groupTable(group, openByDefault) {
   const head = '<tr>' + cols.map(c => '<th>' + escapeHtml(c) + '</th>').join('') + '</tr>';
   const shown = rows.slice(0, 50);
   const body = shown.map(r =>
-    '<tr>' + cols.map(c => '<td>' + escapeHtml(r[c] == null ? '' : r[c]) + '</td>').join('') + '</tr>'
+    '<tr>' + cols.map(c => '<td>' + renderCell(c, r[c]) + '</td>').join('') + '</tr>'
   ).join('');
   const more = rows.length > shown.length
     ? '<div class="more-note">Showing first ' + shown.length + ' of ' + rows.length + ' rows in this group</div>'
