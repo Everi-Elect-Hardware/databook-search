@@ -77,6 +77,14 @@ $Schema = @{
 
 $AllowedOps = @('=', 'LIKE', 'IN', '<', '<=', '>', '>=', '<>')
 
+# Live-discovered map of every dbo table that has IGTPartNo-style data,
+# populated by Initialize-LiveSchema at startup. Used by the universal
+# keyword scan so we can find parts the curated $Schema doesn't cover
+# (e.g. USB hubs in IC-Digital, oscillators, switches, displays, etc.).
+$AllTables = @{}
+# Tables to never scan (system / cache / non-component).
+$ExcludedTables = @('Database CacheHitRatioResults','Documentation','LED_old')
+
 # Forbidden tokens in any text value or identifier (defense in depth).
 $ForbiddenPattern = '(?i)(;|--|/\*|\*/|\bxp_|\bsp_|\bexec\b|\bexecute\b|\binsert\b|\bupdate\b|\bdelete\b|\bdrop\b|\balter\b|\bcreate\b|\btruncate\b|\bmerge\b|\bgrant\b|\brevoke\b|\bbackup\b|\brestore\b|\bopenrowset\b|\bopenquery\b|\bbulk\b|\bshutdown\b|\bwaitfor\b)'
 
@@ -109,6 +117,52 @@ function New-OdbcConnection {
     $c  = New-Object System.Data.Odbc.OdbcConnection $cs
     $c.Open()
     return $c
+}
+
+function Initialize-LiveSchema {
+    <#
+        Reads INFORMATION_SCHEMA at startup and populates $script:AllTables
+        with every dbo table that has an IGTPartNo column. Stores the list
+        of string-ish columns per table for the universal keyword scan.
+        Read-only; opens its own short-lived connection so the MaxRows cap
+        on Invoke-SafeQuery doesn't truncate the metadata listing.
+    #>
+    try {
+        $conn = New-OdbcConnection
+        try {
+            $cmd = $conn.CreateCommand()
+            $cmd.CommandText = @"
+SELECT c.TABLE_NAME, c.COLUMN_NAME, c.DATA_TYPE
+FROM INFORMATION_SCHEMA.COLUMNS c
+WHERE c.TABLE_SCHEMA = 'dbo'
+  AND c.TABLE_NAME IN (
+    SELECT TABLE_NAME FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA='dbo' AND COLUMN_NAME='IGTPartNo'
+  )
+"@
+            $cmd.CommandTimeout = $CmdTimeoutSec
+            $reader = $cmd.ExecuteReader()
+            $map = @{}
+            while ($reader.Read()) {
+                $t   = [string]$reader['TABLE_NAME']
+                if ($script:ExcludedTables -contains $t) { continue }
+                $col = [string]$reader['COLUMN_NAME']
+                $dt  = [string]$reader['DATA_TYPE']
+                if (-not $map.ContainsKey($t)) { $map[$t] = @{ all=@(); text=@() } }
+                $map[$t].all += $col
+                if ($dt -match '^(varchar|nvarchar|char|nchar|text|ntext)$') {
+                    $map[$t].text += $col
+                }
+            }
+            $reader.Close()
+            $script:AllTables = $map
+            Write-Log "Live schema: $($map.Count) tables discovered with IGTPartNo column."
+        }
+        finally { $conn.Close() }
+    } catch {
+        Write-Log "Live schema discovery failed: $_  (universal scan will use curated `$Schema only)" 'WARN'
+        $script:AllTables = @{}
+    }
 }
 
 function Invoke-SafeQuery {
@@ -475,13 +529,24 @@ Important storage notes:
 - Diode.Type is a short code: SHTKY, TVS, ZNR, RECT, SIGNAL, SW, ARRAY, BRDG, REF.
 - PKG_TYPE values are exact labels like 0603, SOT-23, DO-35, SO-8.
 
-Reply with ONLY a JSON object of the form:
+Reply with ONLY a JSON object. Two shapes are allowed:
+
+A. Structured filter (use when you can identify a table and useful filters):
 {
+  "mode": "structured",
   "table": "Resistor",
   "filters": [{"column":"PKG_TYPE","op":"=","value":"0603"}, ...],
   "columns": ["IGTPartNo","Value","PKG_TYPE","Tolerance","State"]
 }
-If no table fits, reply with {"table": null}.
+
+B. Keyword scan (use when the user asks for "all/any/every X", or X is a part
+   code, or you cannot tell which table applies):
+{
+  "mode": "keyword",
+  "keyword": "TVS"
+}
+
+If nothing useful can be done, reply with {"mode": "none"}.
 "@
 
     $body = @{
@@ -505,8 +570,19 @@ If no table fits, reply with {"table": null}.
             -Body $body -TimeoutSec 30
         $content = $resp.choices[0].message.content
         $j = $content | ConvertFrom-Json
+        $mode = if ($j.PSObject.Properties.Name -contains 'mode' -and $j.mode) { [string]$j.mode } else { 'structured' }
+        if ($mode -eq 'keyword' -and $j.keyword) {
+            $script:LastLlmError = $null
+            $script:LastLlmOkAt  = Get-Date
+            return @{
+                mode = 'keyword'
+                keyword = [string]$j.keyword
+                intent = "LLM-parsed: keyword scan for '$($j.keyword)'"
+            }
+        }
         if (-not $j.table) { return $null }
         $h = @{
+            mode = 'structured'
             table = [string]$j.table
             columns = @($j.columns)
             filters = @()
@@ -577,6 +653,109 @@ function Test-LlmConnection {
     return $result
 }
 
+function Get-DistinctiveKeyword {
+    <#
+        Pick the most useful single search keyword out of the user's free text.
+        Strategy (in order):
+          1. Quoted phrase "...".
+          2. Manufacturer-style part-code token: letters with at least one digit
+             or dash (SRV05-4, SMAJ16A, BSS138, STM32, LM358).
+          3. Known component-noun (mosfet, schottky, varistor, ldo, ...).
+          4. Longest alphabetic word >=4 chars that isn't a stopword.
+        Returns $null if nothing useful was found.
+    #>
+    param([string]$Text)
+    if (-not $Text) { return $null }
+    if ($Text -match '"([^"]{2,})"') { return $matches[1] }
+
+    $partCode = [regex]::Matches($Text, '\b[A-Za-z]{2,}[0-9][A-Za-z0-9\-]*\b')
+    if ($partCode.Count -gt 0) {
+        return ($partCode | Sort-Object { $_.Value.Length } -Descending | Select-Object -First 1).Value
+    }
+
+    $known = @(
+        'schottky','zener','rectifier','varistor','transient','tvs','mosfet','jfet','bjt',
+        'tantalum','ceramic','electrolytic','ferrite','bead','inductor','choke','transformer',
+        'resistor','capacitor','diode','transistor','protection','fuse','ptc','mov',
+        'regulator','ldo','buck','boost','opamp','comparator','adc','dac','mcu','fpga',
+        'connector','header','usb','rj45','ethernet','crystal','oscillator','relay',
+        'optocoupler','photodiode','led','thermistor','hall','accelerometer'
+    )
+    foreach ($w in ($Text.ToLower() -split '[^a-z0-9]+' | Where-Object { $_ })) {
+        if ($known -contains $w) { return $w }
+    }
+
+    $stop = @('the','and','for','with','any','all','show','list','find','give','need','want','please','part','parts','from','that','this')
+    $words = $Text -split '[^a-zA-Z]+' | Where-Object { $_.Length -ge 4 -and ($stop -notcontains $_.ToLower()) }
+    if ($words) {
+        return ($words | Sort-Object { $_.Length } -Descending | Select-Object -First 1)
+    }
+    return $null
+}
+
+function Invoke-KeywordSearch {
+    <#
+        Universal keyword scan across every whitelisted table. For each table,
+        one parameterised SELECT with [Description]/[Type]/[SubType]/[Device]
+        LIKE @kw (whichever exist). Tags rows with _source = <table>.
+        Same safety stack as Invoke-SafeQuery.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $Keyword,
+        [int] $PerTableMax = 200
+    )
+    if (-not $Keyword -or $Keyword.Length -lt 2) { return @() }
+    if (-not (Test-SafeValue $Keyword)) { throw "Keyword rejected by safety filter." }
+
+    $kw = "%$Keyword%"
+    $all = New-Object System.Collections.ArrayList
+
+    # Prefer the live-discovered universe of tables. Fall back to curated $Schema
+    # if discovery failed.
+    $tableSource = if ($script:AllTables -and $script:AllTables.Count -gt 0) {
+        $script:AllTables
+    } else {
+        $fallback = @{}
+        foreach ($k in $Schema.Keys) { $fallback[$k] = @{ all = $Schema[$k]; text = $Schema[$k] } }
+        $fallback
+    }
+
+    foreach ($table in $tableSource.Keys) {
+        $allCols  = $tableSource[$table].all
+        $textCols = $tableSource[$table].text
+        # Columns to LIKE-scan: prefer Description/Type/SubType/Device/Comments
+        # but fall back to every text column on this table so we never miss
+        # rows just because the part description lives in a non-standard field.
+        $likeCols = @()
+        foreach ($c in 'Description','Type','SubType','Device','Comments','Application') {
+            if ($textCols -contains $c) { $likeCols += $c }
+        }
+        if ($likeCols.Count -eq 0) { $likeCols = @($textCols | Select-Object -First 6) }
+        if (-not $likeCols -or $likeCols.Count -eq 0) { continue }
+        # Columns to return: a friendly subset if available, else everything.
+        $selCols = @()
+        foreach ($c in 'IGTPartNo','Description','Type','SubType','PKG_TYPE','Package','Device','Value','Voltage','State') {
+            if ($allCols -contains $c) { $selCols += $c }
+        }
+        if (-not $selCols -or $selCols.Count -eq 0) { $selCols = @($allCols | Select-Object -First 8) }
+        $whereOr = ($likeCols | ForEach-Object { "[$_] LIKE ?" }) -join ' OR '
+        $selList = ($selCols | ForEach-Object { "[$_]" }) -join ', '
+        $sql = "SELECT TOP $PerTableMax $selList FROM [dbo].[$table] WHERE $whereOr"
+        $params = @()
+        foreach ($lc in $likeCols) { $params += $kw }
+        try {
+            $rows = Invoke-SafeQuery -Sql $sql -Params $params
+            foreach ($r in $rows) {
+                $r | Add-Member -NotePropertyName '_source' -NotePropertyValue $table -Force
+                [void]$all.Add($r)
+            }
+        } catch {
+            Write-Log "Keyword scan on $table skipped: $_" 'WARN'
+        }
+    }
+    return @($all.ToArray())
+}
+
 function Format-ChatReply {
     param($Parsed, $Rows, $Truncated)
 
@@ -584,7 +763,29 @@ function Format-ChatReply {
     if ($count -eq 0) {
         return "No matches in DxDatabook for: $($Parsed.intent)."
     }
-    $lead = "Found $count$(if($Truncated){'+'}) match(es) in DxDatabook ($($Parsed.table)):"
+
+    # Group by source table when present (universal keyword scan paths).
+    $hasSource = @($Rows) | Where-Object { $_.PSObject.Properties.Name -contains '_source' -and $_._source } | Select-Object -First 1
+    if ($hasSource) {
+        $groups = @($Rows) | Group-Object _source
+        $tableSummary = ($groups | ForEach-Object { "$($_.Name)=$($_.Count)" }) -join ', '
+        $lead = "Found $count$(if($Truncated){'+'}) match(es) across DxDatabook ($tableSummary):"
+        $samples = foreach ($g in $groups) {
+            "  -- $($g.Name) --"
+            $g.Group | Select-Object -First 3 | ForEach-Object {
+                $r = $_
+                $bits = @()
+                foreach ($k in 'IGTPartNo','Value','PKG_TYPE','Voltage','Type','SubType','Description','State') {
+                    if ($r.PSObject.Properties.Name -contains $k -and $r.$k) { $bits += "$($k)=$($r.$k)" }
+                }
+                '    - ' + ($bits -join '  ')
+            }
+        }
+        return $lead + "`n" + ($samples -join "`n")
+    }
+
+    $tbl = if ($Parsed.table) { $Parsed.table } else { 'results' }
+    $lead = "Found $count$(if($Truncated){'+'}) match(es) in DxDatabook ($tbl):"
     $top = @($Rows) | Select-Object -First 5 | ForEach-Object {
         $r = $_
         $bits = @()
@@ -619,6 +820,9 @@ if ($GitHubToken) {
     Write-Log "LLM disabled (no token) - using rule-based parser only"
 }
 Write-Log "Press Ctrl+C to stop."
+
+# Discover the full set of component tables once at startup.
+Initialize-LiveSchema
 
 try {
     while ($listener.IsListening) {
@@ -769,39 +973,138 @@ try {
                         Send-Json -Context $ctx -Status 400 -Obj @{ error = 'message required' } -Origin $origin
                         break
                     }
-                    Write-Log "CHAT: $userText" 'CHAT'
-                    $parsed = Invoke-LlmParser -Text $userText
+                    # Optional refinement context: caller can send mode='refine' plus
+                    # previousQuery to AND-combine with the previous user message.
+                    # Default is mode='fresh' (no context carried) so 'usb' after 'tvs'
+                    # is treated as a brand-new search, not a TVS filter.
+                    $reqMode = if ($reqObj.mode) { [string]$reqObj.mode } else { 'fresh' }
+                    $prevQuery = if ($reqObj.previousQuery) { [string]$reqObj.previousQuery } else { '' }
+                    $effectiveText = $userText
+                    if ($reqMode -eq 'refine' -and $prevQuery) {
+                        $effectiveText = "$prevQuery $userText"
+                        Write-Log "REFINE: '$prevQuery' + '$userText' -> '$effectiveText'" 'CHAT'
+                    } else {
+                        Write-Log "CHAT: $userText" 'CHAT'
+                    }
+                    $parsed = Invoke-LlmParser -Text $effectiveText
                     $usedLlm = $true
                     if (-not $parsed) {
-                        $parsed = Invoke-RuleParser -Text $userText
+                        $parsed = Invoke-RuleParser -Text $effectiveText
                         $usedLlm = $false
                     }
                     if (-not $parsed) {
-                        Send-Json -Context $ctx -Status 200 -Obj @{
-                            ok = $true
-                            reply = "I didn't recognize a component family. Try '0603 1% 4.7k resistor' or '0.1uF 50V 0402 cap' or 'SRV05-4 ESD'."
-                            parsed = $null
-                            rows = @()
-                        } -Origin $origin
-                        break
+                        # Final fallback: try a universal keyword scan from whatever
+                        # distinctive word we can extract from the message.
+                        $kw = Get-DistinctiveKeyword $effectiveText
+                        if ($kw) {
+                            $parsed = @{ mode = 'keyword'; keyword = $kw; intent = "Fallback keyword scan: '$kw'" }
+                        } else {
+                            Send-Json -Context $ctx -Status 200 -Obj @{
+                                ok = $true
+                                reply = "I couldn't extract a useful keyword. Try a part code (SRV05-4), a value (4.7k, 0.1uF), a package (0603, SOT-23), or a family (TVS, MOSFET, LDO)."
+                                parsed = $null
+                                rows = @()
+                            } -Origin $origin
+                            break
+                        }
                     }
                     try {
-                        $built = Build-Search $parsed
-                        Write-Log "SQL: $($built.Sql)" 'SQL'
-                        $rows = Invoke-SafeQuery -Sql $built.Sql -Params $built.Params
-                        $reply = Format-ChatReply -Parsed $parsed -Rows $rows -Truncated (@($rows).Count -ge $MaxRows)
+                        $rowsList = New-Object System.Collections.ArrayList
+                        $builtSql = $null
+                        $kwSql = $null
+                        $kwUsed = $null
+
+                        # Path A: structured query (when parser identified a table)
+                        if ($parsed.table -and (-not $parsed.mode -or $parsed.mode -eq 'structured')) {
+                            $built = Build-Search $parsed
+                            $builtSql = $built.Sql
+                            Write-Log "SQL: $builtSql" 'SQL'
+                            $sRows = Invoke-SafeQuery -Sql $built.Sql -Params $built.Params
+                            foreach ($r in $sRows) {
+                                if (-not ($r.PSObject.Properties.Name -contains '_source')) {
+                                    $r | Add-Member -NotePropertyName '_source' -NotePropertyValue $parsed.table -Force
+                                }
+                                [void]$rowsList.Add($r)
+                            }
+                        }
+
+                        # Path B: universal keyword scan across all 9 tables.
+                        $wantsBroad = ($effectiveText -match '(?i)\b(all|any|every|list|show|find|search)\b')
+                        $forceKw    = ($parsed.mode -eq 'keyword')
+                        $sparseHit  = ($rowsList.Count -lt 3)
+                        $kw = if ($forceKw) { [string]$parsed.keyword } else { Get-DistinctiveKeyword $effectiveText }
+                        if ($kw -and ($forceKw -or $wantsBroad -or $sparseHit)) {
+                            try {
+                                Write-Log "Keyword scan: '$kw'" 'SQL'
+                                $kwRows = Invoke-KeywordSearch -Keyword $kw
+                                $kwSql  = "<universal scan on '%${kw}%' across all tables>"
+                                $kwUsed = $kw
+                                $seen = @{}
+                                foreach ($r in $rowsList) {
+                                    if ($r.IGTPartNo) { $seen[[string]$r.IGTPartNo] = $true }
+                                }
+                                foreach ($r in $kwRows) {
+                                    $pn = if ($r.IGTPartNo) { [string]$r.IGTPartNo } else { $null }
+                                    if ($pn -and $seen.ContainsKey($pn)) { continue }
+                                    if ($pn) { $seen[$pn] = $true }
+                                    [void]$rowsList.Add($r)
+                                }
+                            } catch {
+                                Write-Log "Keyword scan skipped: $_" 'WARN'
+                            }
+                        }
+
+                        $rows = @($rowsList.ToArray())
+
+                        # If this was a refinement, narrow the result set so the new
+                        # term must appear in one of the row's text-ish fields.
+                        if ($reqMode -eq 'refine' -and $prevQuery -and $userText -and $rows.Count -gt 0) {
+                            $needle = $userText.Trim().ToLower()
+                            if ($needle) {
+                                $filtered = New-Object System.Collections.ArrayList
+                                foreach ($r in $rows) {
+                                    $hit = $false
+                                    foreach ($p in $r.PSObject.Properties) {
+                                        $v = $p.Value
+                                        if ($null -eq $v) { continue }
+                                        if (([string]$v).ToLower().Contains($needle)) { $hit = $true; break }
+                                    }
+                                    if ($hit) { [void]$filtered.Add($r) }
+                                }
+                                $rows = @($filtered.ToArray())
+                                Write-Log "Refine post-filter on '$needle' kept $($rows.Count) rows" 'CHAT'
+                            }
+                        }
+
+                        $truncated = ($rows.Count -ge $MaxRows)
+                        $baseReply = Format-ChatReply -Parsed $parsed -Rows $rows -Truncated $truncated
+                        # Echo how we interpreted the query so 'fresh' vs 'refine' is visible.
+                        $interp = if ($reqMode -eq 'refine' -and $prevQuery) {
+                            "Refining previous ('$prevQuery') with '$userText'"
+                        } elseif ($parsed.mode -eq 'keyword' -or $forceKw) {
+                            "Fresh search - universal scan for keyword '$kw'"
+                        } elseif ($parsed.table) {
+                            "Fresh search - $($parsed.table) table" + $(if($kwUsed){" + universal scan for '$kwUsed'"}else{''})
+                        } else {
+                            "Fresh search"
+                        }
+                        $reply = "[$interp]`n" + $baseReply
                         $parsedTag = if ($usedLlm) { 'llm' }
                                      elseif ($GitHubToken -and $script:LastLlmError) { 'rules-fallback' }
                                      else { 'rules' }
+                        $sqlOut = if ($builtSql -and $kwSql) { "$builtSql  +  $kwSql" }
+                                  elseif ($builtSql)         { $builtSql }
+                                  else                       { $kwSql }
                         Send-Json -Context $ctx -Status 200 -Obj @{
                             ok = $true
                             reply = $reply
                             parsedBy = $parsedTag
                             llmError = $(if($parsedTag -eq 'rules-fallback'){ $script:LastLlmError } else { $null })
                             parsed = $parsed
-                            sql = $built.Sql
-                            rowCount = @($rows).Count
-                            truncated = (@($rows).Count -ge $MaxRows)
+                            keyword = $kwUsed
+                            sql = $sqlOut
+                            rowCount = $rows.Count
+                            truncated = $truncated
                             rows = $rows
                         } -Origin $origin
                     } catch {

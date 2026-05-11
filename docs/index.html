@@ -3,83 +3,336 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>IGT Databook Chat</title>
+  <title>IGT Databook</title>
   <style>
-    :root { --bg:#0e1116; --card:#161b22; --fg:#e6edf3; --mut:#7d8590; --acc:#2f81f7; --bad:#f85149; --good:#3fb950; --bot:#1f2937; --me:#1f6feb; }
-    html,body { background:var(--bg); color:var(--fg); font-family: ui-sans-serif, -apple-system, Segoe UI, Roboto, sans-serif; margin:0; height:100%; }
-    body { display:flex; flex-direction:column; }
-    header { padding:10px 16px; border-bottom:1px solid #30363d; display:flex; gap:12px; align-items:center; }
-    header h1 { font-size:15px; margin:0; }
-    .pill { display:inline-flex; align-items:center; gap:6px; background:#21262d; border:1px solid #30363d; border-radius:999px; padding:3px 10px; font-size:12px; color:var(--mut); }
-    .pill .dot { width:8px; height:8px; border-radius:50%; background:var(--bad); }
-    .pill.ok .dot { background: var(--good); }
-    main { flex:1; overflow-y:auto; padding:16px; max-width:900px; width:100%; margin:0 auto; box-sizing:border-box; }
-    .msg { margin-bottom:14px; display:flex; flex-direction:column; }
-    .msg.me { align-items:flex-end; }
-    .msg .bubble { max-width: 80%; padding:10px 14px; border-radius:12px; white-space:pre-wrap; font-size:14px; line-height:1.4; }
-    .msg.me .bubble { background:var(--me); color:white; border-bottom-right-radius:4px; }
-    .msg.bot .bubble { background:var(--bot); border:1px solid #30363d; border-bottom-left-radius:4px; }
-    .msg .meta { font-size:11px; color:var(--mut); margin-top:4px; }
-    table { border-collapse: collapse; width:100%; font-size:12px; margin-top:8px; }
-    th, td { padding:4px 8px; border-bottom:1px solid #30363d; text-align:left; white-space:nowrap; }
-    th { background:#0d1117; }
-    details > summary { cursor:pointer; color:var(--mut); font-size:12px; margin-top:6px; }
-    code { background:#0d1117; border:1px solid #30363d; border-radius:4px; padding:2px 6px; font-size:12px; display:block; white-space:pre-wrap; margin-top:4px; }
-    footer { border-top:1px solid #30363d; padding:10px; }
-    .composer { max-width:900px; margin:0 auto; display:flex; gap:8px; }
-    .composer input { flex:1; background:#0d1117; color:var(--fg); border:1px solid #30363d; border-radius:8px; padding:10px 12px; font-size:14px; }
-    .composer button { background:var(--acc); color:white; border:none; border-radius:8px; padding:10px 16px; font-size:14px; cursor:pointer; }
-    .composer button:disabled { opacity:0.5; cursor:not-allowed; }
+    /* ---------- Theme tokens (Claude / ChatGPT-inspired) ---------- */
+    :root {
+      --bg:         #ffffff;
+      --bg-soft:    #faf9f7;
+      --bg-elev:    #f4f3ef;
+      --border:     #e6e3dc;
+      --border-strong: #cfcbc1;
+      --fg:         #1f1e1c;
+      --fg-soft:    #5a5751;
+      --fg-mut:     #8a877f;
+      --acc:        #cc785c;       /* Claude clay */
+      --acc-hover:  #b46a51;
+      --user-bg:    #f0eee6;       /* warm cream user bubble */
+      --ok:         #2b7a3a;
+      --bad:        #c0392b;
+      --code-bg:    #f6f5f0;
+      --shadow:     0 1px 2px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.04);
+      --radius:     14px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg:         #1f1e1c;
+        --bg-soft:    #262522;
+        --bg-elev:    #2d2c28;
+        --border:     #3a3934;
+        --border-strong: #4a4843;
+        --fg:         #f5f4ef;
+        --fg-soft:    #c4c1b8;
+        --fg-mut:     #8a877f;
+        --acc:        #d4866b;
+        --acc-hover:  #e29478;
+        --user-bg:    #2d2c28;
+        --ok:         #5fc77a;
+        --bad:        #ef6b5a;
+        --code-bg:    #161513;
+        --shadow:     0 1px 2px rgba(0,0,0,0.2), 0 4px 16px rgba(0,0,0,0.2);
+      }
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: ui-sans-serif, -apple-system, "Segoe UI", "Inter", Roboto, sans-serif;
+      font-size: 15px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+    body { display: flex; flex-direction: column; }
+
+    /* ---------- Top bar ---------- */
+    header {
+      position: sticky; top: 0; z-index: 5;
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 18px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+    }
+    .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; color: var(--fg); }
+    .brand .logo {
+      width: 22px; height: 22px; border-radius: 6px;
+      background: linear-gradient(135deg, var(--acc), #e09a82);
+      display: inline-flex; align-items: center; justify-content: center;
+      color: #fff; font-size: 11px; font-weight: 700;
+    }
+    .spacer { flex: 1; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px;
+      font-size: 12px; color: var(--fg-soft);
+      background: var(--bg-soft);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+    }
+    .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--bad); }
+    .pill.ok .dot { background: var(--ok); }
+    .pill.warn .dot { background: #d49a2a; }
+
+    /* ---------- Main scroll area ---------- */
+    main {
+      flex: 1; min-height: 0;
+      overflow-y: auto;
+      padding: 24px 16px 160px 16px;
+    }
+    .col { max-width: 760px; margin: 0 auto; }
+
+    /* ---------- Welcome screen ---------- */
+    .welcome {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      min-height: 60vh;
+      text-align: center;
+      padding: 24px 12px;
+    }
+    .welcome h1 {
+      font-size: 28px; font-weight: 600;
+      margin: 0 0 8px 0;
+      letter-spacing: -0.01em;
+    }
+    .welcome p {
+      color: var(--fg-soft);
+      margin: 0 0 24px 0; max-width: 480px;
+    }
+    .chips {
+      display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
+      max-width: 640px;
+    }
+    .chip {
+      background: var(--bg-soft);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 14px;
+      font-size: 13px;
+      color: var(--fg-soft);
+      cursor: pointer;
+      transition: background .15s, border-color .15s, color .15s;
+    }
+    .chip:hover { background: var(--bg-elev); border-color: var(--border-strong); color: var(--fg); }
+
+    /* ---------- Messages ---------- */
+    .msg { margin: 18px 0; display: flex; flex-direction: column; animation: fadeIn .18s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+    .msg.me { align-items: flex-end; }
+    .msg.me .bubble {
+      background: var(--user-bg);
+      border: 1px solid var(--border);
+      color: var(--fg);
+      padding: 10px 14px;
+      border-radius: 18px 18px 4px 18px;
+      max-width: 80%;
+      white-space: pre-wrap;
+    }
+
+    .msg.bot { align-items: stretch; }
+    .msg.bot .row { display: flex; gap: 12px; align-items: flex-start; }
+    .avatar {
+      width: 28px; height: 28px; border-radius: 50%; flex: 0 0 28px;
+      background: linear-gradient(135deg, var(--acc), #e09a82);
+      color: #fff; font-size: 11px; font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      margin-top: 2px;
+    }
+    .msg.bot .body { flex: 1; min-width: 0; }
+    .msg.bot .body .interp {
+      font-size: 12px; color: var(--fg-mut);
+      margin-bottom: 6px;
+    }
+    .msg.bot .body .text { color: var(--fg); white-space: pre-wrap; word-wrap: break-word; }
+    .msg .meta { font-size: 11px; color: var(--fg-mut); margin-top: 6px; padding-left: 40px; }
+    .msg.me .meta { padding-left: 0; padding-right: 4px; }
+
     .err { color: var(--bad); }
-    .overlay { position:fixed; inset:0; background:rgba(13,17,23,0.85); display:none; align-items:center; justify-content:center; z-index:10; }
-    .overlay.show { display:flex; }
-    .card { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:24px 28px; max-width:560px; width:90%; box-shadow:0 8px 32px rgba(0,0,0,0.6); }
-    .card h2 { margin:0 0 8px 0; font-size:18px; color:var(--bad); }
-    .card p { margin:8px 0; line-height:1.5; }
-    .card code, .card .path { background:#0d1117; border:1px solid #30363d; border-radius:6px; padding:2px 6px; font-family:Consolas,monospace; font-size:12px; word-break:break-all; }
-    .card .path { display:block; padding:8px 10px; margin:6px 0; user-select:all; }
-    .card ol { margin:8px 0; padding-left:22px; }
-    .card .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
-    .card .actions button, .card .actions a.btn { background:var(--acc); color:#fff; border:none; border-radius:8px; padding:9px 14px; font-size:13px; cursor:pointer; text-decoration:none; display:inline-block; }
-    .card .actions button.secondary, .card .actions a.btn.secondary { background:#30363d; }
-    .card .toast { color:var(--ok); font-size:12px; margin-left:6px; opacity:0; transition:opacity 0.2s; }
-    .card .toast.show { opacity:1; }
+
+    /* ---------- Tables & details ---------- */
+    details { margin-top: 10px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--bg-soft); }
+    details > summary {
+      cursor: pointer; user-select: none;
+      font-size: 12px; color: var(--fg-soft);
+      padding: 8px 12px;
+      background: var(--bg-soft);
+      list-style: none;
+    }
+    details[open] > summary { border-bottom: 1px solid var(--border); }
+    details > summary::-webkit-details-marker { display: none; }
+    details > summary::before { content: "▸ "; color: var(--fg-mut); }
+    details[open] > summary::before { content: "▾ "; }
+
+    .table-wrap { max-height: 420px; overflow: auto; }
+    table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+    th, td { padding: 6px 10px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--border); }
+    th { background: var(--bg-elev); font-weight: 600; color: var(--fg-soft); position: sticky; top: 0; }
+    tr:hover td { background: var(--bg-elev); }
+
+    code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12px; display: block; white-space: pre-wrap; word-break: break-all; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; color: var(--fg-soft); }
+
+    /* ---------- Composer (fixed bottom) ---------- */
+    .composer-wrap {
+      position: fixed; left: 0; right: 0; bottom: 0;
+      padding: 16px 16px 22px 16px;
+      background: linear-gradient(to top, var(--bg) 50%, rgba(255,255,255,0));
+      z-index: 4;
+    }
+    @media (prefers-color-scheme: dark) {
+      .composer-wrap { background: linear-gradient(to top, var(--bg) 50%, rgba(31,30,28,0)); }
+    }
+    .composer {
+      max-width: 760px; margin: 0 auto;
+      display: flex; flex-direction: column;
+      background: var(--bg-soft);
+      border: 1px solid var(--border-strong);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+      padding: 8px 8px 8px 16px;
+      transition: border-color .15s;
+    }
+    .composer:focus-within { border-color: var(--acc); }
+    .composer textarea {
+      flex: 1;
+      background: transparent;
+      color: var(--fg);
+      border: none; outline: none;
+      font: inherit;
+      resize: none;
+      min-height: 28px; max-height: 200px;
+      padding: 8px 0 4px 0;
+      width: 100%;
+    }
+    .composer textarea::placeholder { color: var(--fg-mut); }
+    .composer .row2 {
+      display: flex; align-items: center; gap: 10px;
+      padding-top: 4px;
+    }
+    .refine-toggle {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--fg-mut);
+      padding: 5px 10px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--bg);
+      cursor: pointer; user-select: none;
+      transition: all .15s;
+    }
+    .refine-toggle input { margin: 0; cursor: pointer; accent-color: var(--acc); }
+    .refine-toggle.active { color: var(--acc); border-color: var(--acc); background: rgba(204,120,92,0.08); }
+    .refine-toggle.disabled { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
+    .composer .grow { flex: 1; }
+    .send-btn {
+      width: 32px; height: 32px; border-radius: 50%; border: none;
+      background: var(--acc); color: #fff;
+      cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+      transition: background .15s, transform .1s;
+    }
+    .send-btn:hover:not(:disabled) { background: var(--acc-hover); }
+    .send-btn:active { transform: scale(0.95); }
+    .send-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    .send-btn svg { width: 16px; height: 16px; }
+
+    /* ---------- Overlay (agent down) ---------- */
+    .overlay {
+      position: fixed; inset: 0;
+      background: rgba(20,18,14,0.55);
+      backdrop-filter: blur(4px);
+      display: none; align-items: center; justify-content: center;
+      z-index: 20;
+    }
+    .overlay.show { display: flex; }
+    .card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      padding: 24px 26px;
+      max-width: 560px; width: 92%;
+    }
+    .card h2 { margin: 0 0 8px 0; font-size: 17px; font-weight: 600; color: var(--bad); }
+    .card p { margin: 8px 0; color: var(--fg-soft); }
+    .card .path { display: block; padding: 8px 10px; margin: 6px 0; user-select: all; font-family: ui-monospace, Consolas, monospace; font-size: 12px; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; word-break: break-all; }
+    .card ol { margin: 8px 0; padding-left: 22px; color: var(--fg-soft); }
+    .card .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+    .card .actions button {
+      background: var(--acc); color: #fff;
+      border: none; border-radius: 10px;
+      padding: 9px 14px; font-size: 13px; font-weight: 500;
+      cursor: pointer;
+    }
+    .card .actions button:hover { background: var(--acc-hover); }
+    .card .actions button.secondary { background: var(--bg-elev); color: var(--fg); border: 1px solid var(--border); }
+    .card .actions button.secondary:hover { background: var(--border); }
+    .toast { font-size: 11px; color: var(--ok); margin-left: 6px; opacity: 0; transition: opacity .2s; }
+    .toast.show { opacity: 1; }
+
+    /* hide welcome when chat has any user message */
+    main.has-chat .welcome { display: none; }
   </style>
 </head>
 <body>
+
 <header>
-  <h1>IGT Databook Chat</h1>
-  <span id="health" class="pill"><span class="dot"></span><span id="healthText">Checking agent...</span></span>
+  <div class="brand"><span class="logo">IG</span> <span>IGT Databook</span></div>
+  <span class="spacer"></span>
   <span class="pill" id="llmPill" style="display:none;"></span>
-  <span style="flex:1;"></span>
   <span class="pill" id="userPill" style="display:none;"></span>
+  <span class="pill" id="health"><span class="dot"></span><span id="healthText">Checking agent...</span></span>
 </header>
 
 <main id="chat">
-  <div class="msg bot"><div class="bubble">Hi - ask me about IGT components in plain English. Examples:
-  - 0603 1% 4.7k resistor
-  - 0.1uF 50V 0402 cap
-  - SRV05-4 ESD protection
-  - SOT-23-3 schottky diode
-
-The agent searches DxDatabook (read-only) and returns matches.</div></div>
+  <div class="col">
+    <div class="welcome" id="welcome">
+      <h1>What part are you looking for?</h1>
+      <p>Ask in plain English &mdash; the agent searches every component table in DxDatabook and groups matches by family.</p>
+      <div class="chips">
+        <div class="chip" data-q="all TVS diodes">all TVS diodes</div>
+        <div class="chip" data-q="USB hub IC">USB hub IC</div>
+        <div class="chip" data-q="0603 1% 4.7k resistor">0603 1% 4.7k resistor</div>
+        <div class="chip" data-q="0.1uF 50V 0402 cap">0.1uF 50V 0402 cap</div>
+        <div class="chip" data-q="SOT-23-3 schottky diode">SOT-23-3 schottky</div>
+        <div class="chip" data-q="ferrite bead 1kOhm">ferrite bead 1kOhm</div>
+      </div>
+    </div>
+  </div>
 </main>
 
-<footer>
+<div class="composer-wrap">
   <div class="composer">
-    <input id="input" type="text" placeholder="Describe the part you need..." autocomplete="off" disabled />
-    <button id="send" disabled>Send</button>
+    <textarea id="input" rows="1" placeholder="Describe the part you need..." autocomplete="off" disabled></textarea>
+    <div class="row2">
+      <label class="refine-toggle disabled" id="refineLabel" title="Combine your next message with the previous one (AND-filter). Default off = each query is a fresh search.">
+        <input type="checkbox" id="refineToggle" disabled />
+        <span>Refine previous</span>
+      </label>
+      <span class="grow"></span>
+      <button class="send-btn" id="send" disabled title="Send (Enter)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+      </button>
+    </div>
   </div>
-</footer>
+</div>
 
 <div id="agentDown" class="overlay">
   <div class="card">
     <h2>Agent isn't running on this PC</h2>
-    <p>The chat page needs the local DatabookAgent (PowerShell) running on <code>localhost:5005</code> to reach DxDatabook. Pick the easiest option:</p>
+    <p>The chat page needs the local DatabookAgent (PowerShell) running on <code style="display:inline;padding:1px 4px;">localhost:5005</code> to reach DxDatabook. Pick the easiest option:</p>
     <ol>
-      <li><strong>From the Mentor library share</strong> &mdash; right-click <code>Start-DatabookAgent.ps1</code> &rarr; <em>Run with PowerShell</em>:
+      <li><strong>From the Mentor library share</strong> &mdash; right-click <code style="display:inline;padding:1px 4px;">Start-DatabookAgent.ps1</code> &rarr; <em>Run with PowerShell</em>:
         <span class="path" id="sharePath">Z:\LIBRARY\MentorGraphics\DatabookAgent\Start-DatabookAgent.ps1</span></li>
-      <li><strong>Or paste this command</strong> into a Run dialog (Win+R) or PowerShell prompt:
+      <li><strong>Or paste this command</strong> into Win+R or a PowerShell prompt:
         <span class="path" id="launchCmd">powershell.exe -NoProfile -ExecutionPolicy Bypass -File "Z:\LIBRARY\MentorGraphics\DatabookAgent\Start-DatabookAgent.ps1"</span></li>
     </ol>
     <div class="actions">
@@ -87,13 +340,14 @@ The agent searches DxDatabook (read-only) and returns matches.</div></div>
       <button class="secondary" id="copyPath">Copy share path<span class="toast" id="copyPathToast">copied</span></button>
       <button class="secondary" id="retryHealth">Retry</button>
     </div>
-    <p style="font-size:12px;color:var(--muted);margin-top:12px;">Browsers cannot start a local program automatically &mdash; this is a one-time-per-session click. Once the agent is running, this dialog closes on its own. <strong>Why .ps1 and not a .bat?</strong> AppLocker blocks .cmd/.bat from user folders; PowerShell scripts run through System32's signed <code>powershell.exe</code>, which is allowed.</p>
+    <p style="font-size:12px;color:var(--fg-mut);margin-top:12px;">Once the agent is running, this dialog closes on its own.</p>
   </div>
 </div>
 
 <script>
 const AGENT = 'http://localhost:5005';
-const chat = document.getElementById('chat');
+const main = document.getElementById('chat');
+const col  = main.querySelector('.col');
 const input = document.getElementById('input');
 const sendBtn = document.getElementById('send');
 
@@ -101,15 +355,55 @@ function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]); });
 }
 
-function addMsg(role, htmlContent, meta) {
+function autosize() {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+}
+input.addEventListener('input', autosize);
+
+function addUserMsg(text) {
   const div = document.createElement('div');
-  div.className = 'msg ' + role;
-  let inner = '<div class="bubble">' + htmlContent + '</div>';
-  if (meta) inner += '<div class="meta">' + escapeHtml(meta) + '</div>';
-  div.innerHTML = inner;
-  chat.appendChild(div);
-  chat.scrollTop = chat.scrollHeight;
+  div.className = 'msg me';
+  div.innerHTML = '<div class="bubble">' + escapeHtml(text) + '</div>';
+  col.appendChild(div);
+  scrollToEnd();
   return div;
+}
+
+function addBotMsg(htmlContent) {
+  const div = document.createElement('div');
+  div.className = 'msg bot';
+  div.innerHTML = '<div class="row"><div class="avatar">IG</div><div class="body">' + htmlContent + '</div></div>';
+  col.appendChild(div);
+  scrollToEnd();
+  return div;
+}
+
+function scrollToEnd() { main.scrollTop = main.scrollHeight; }
+
+function rowsTable(rows) {
+  if (!rows || !rows.length) return '';
+  const cols = Object.keys(rows[0]);
+  const head = '<tr>' + cols.map(c => '<th>' + escapeHtml(c) + '</th>').join('') + '</tr>';
+  const body = rows.slice(0, 100).map(r =>
+    '<tr>' + cols.map(c => '<td>' + escapeHtml(r[c]) + '</td>').join('') + '</tr>'
+  ).join('');
+  const moreNote = rows.length > 100 ? '<div style="padding:6px 10px;font-size:11px;color:var(--fg-mut);">Showing first 100 of ' + rows.length + ' rows</div>' : '';
+  return '<details open><summary>' + rows.length + ' row(s)</summary><div class="table-wrap"><table>' + head + body + '</table></div>' + moreNote + '</details>';
+}
+
+function formatReply(j) {
+  // Parse the optional [interpretation] prefix the agent prepends.
+  let interp = '';
+  let body = j.reply || '';
+  const m = body.match(/^\[([^\]]+)\]\s*\n?/);
+  if (m) { interp = m[1]; body = body.slice(m[0].length); }
+  let html = '';
+  if (interp) html += '<div class="interp">' + escapeHtml(interp) + '</div>';
+  html += '<div class="text">' + escapeHtml(body).replace(/\n/g,'<br>') + '</div>';
+  if (j.rows && j.rows.length) html += rowsTable(j.rows);
+  if (j.sql) html += '<details><summary>SQL</summary><code>' + escapeHtml(j.sql) + '</code></details>';
+  return html;
 }
 
 async function checkHealth() {
@@ -126,18 +420,18 @@ async function checkHealth() {
     userPill.style.display = 'inline-flex';
     userPill.textContent = j.user;
     llmPill.style.display = 'inline-flex';
+    llmPill.classList.remove('ok','warn');
     if (j.llmEnabled) {
-      llmPill.textContent = 'LLM: ' + (j.llmModel || 'on');
+      llmPill.textContent = j.llmModel || 'LLM on';
       llmPill.classList.add('ok');
       llmPill.title = 'LLM probe OK at ' + (j.llmCheckedAt || '');
     } else if (j.llmConfigured) {
-      llmPill.textContent = 'LLM: error - ' + (j.llmError || 'unknown');
-      llmPill.classList.remove('ok');
-      llmPill.title = 'Token configured but the LLM probe failed. Renew at github.com/settings/personal-access-tokens';
+      llmPill.textContent = 'LLM error';
+      llmPill.classList.add('warn');
+      llmPill.title = (j.llmError || 'Token configured but probe failed') + ' — renew at github.com/settings/personal-access-tokens';
     } else {
-      llmPill.textContent = 'LLM: off (rules only)';
-      llmPill.classList.remove('ok');
-      llmPill.title = 'No token configured. Add agent\\.env to enable LLM parsing.';
+      llmPill.textContent = 'rules-only';
+      llmPill.title = 'No GitHub token. Add agent\\.env with GITHUB_TOKEN=... to route queries through Copilot.';
     }
     input.disabled = false; sendBtn.disabled = false;
     healthFailCount = 0;
@@ -145,7 +439,7 @@ async function checkHealth() {
     return true;
   } catch (e) {
     pill.classList.remove('ok');
-    txt.textContent = 'Agent not running - run start.cmd';
+    txt.textContent = 'Agent not running';
     input.disabled = true; sendBtn.disabled = true;
     healthFailCount = (healthFailCount || 0) + 1;
     if (healthFailCount >= 2) showAgentDown();
@@ -174,51 +468,79 @@ document.getElementById('copyPath').onclick = function(){
   copyToClipboard(document.getElementById('sharePath').textContent, 'copyPathToast');
 };
 
-function rowsTable(rows) {
-  if (!rows || !rows.length) return '';
-  const cols = Object.keys(rows[0]);
-  const head = '<tr>' + cols.map(c => '<th>' + escapeHtml(c) + '</th>').join('') + '</tr>';
-  const body = rows.slice(0, 25).map(r =>
-    '<tr>' + cols.map(c => '<td>' + escapeHtml(r[c]) + '</td>').join('') + '</tr>'
-  ).join('');
-  return '<details open><summary>' + rows.length + ' row(s)</summary><table>' + head + body + '</table></details>';
-}
-
 async function ask(text) {
-  addMsg('me', escapeHtml(text));
-  const placeholder = addMsg('bot', '<i>Searching DxDatabook...</i>');
+  main.classList.add('has-chat');
+  addUserMsg(text);
+  const placeholder = addBotMsg('<div class="text" style="color:var(--fg-mut);"><i>Searching DxDatabook…</i></div>');
+
+  const refineEl = document.getElementById('refineToggle');
+  const refining = !!(refineEl && refineEl.checked && lastUserQuery);
+  const payload = { message: text, mode: refining ? 'refine' : 'fresh' };
+  if (refining) payload.previousQuery = lastUserQuery;
+
   try {
     const r = await fetch(AGENT + '/chat', {
       method:'POST',
       headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({ message: text })
+      body: JSON.stringify(payload)
     });
     const j = await r.json();
-    let html = '';
+    let inner;
     if (j.error) {
-      html = '<span class="err">Error: ' + escapeHtml(j.error) + '</span>';
+      inner = '<div class="text"><span class="err">Error: ' + escapeHtml(j.error) + '</span></div>';
     } else {
-      html = escapeHtml(j.reply || '(no reply)').replace(/\n/g,'<br>');
-      if (j.rows && j.rows.length) html += rowsTable(j.rows);
-      if (j.sql) html += '<details><summary>SQL</summary><code>' + escapeHtml(j.sql) + '</code></details>';
+      inner = formatReply(j);
     }
-    placeholder.innerHTML = '<div class="bubble">' + html + '</div>' +
-      (j.parsedBy ? '<div class="meta">parsed by: ' + j.parsedBy +
-        (j.llmError ? ' &bull; LLM error: ' + escapeHtml(j.llmError) : '') +
-        (j.truncated ? ' &bull; result truncated' : '') + '</div>' : '');
-    chat.scrollTop = chat.scrollHeight;
+    placeholder.querySelector('.body').innerHTML = inner;
+    if (j.parsedBy) {
+      const m = document.createElement('div');
+      m.className = 'meta';
+      m.textContent = 'parsed by: ' + j.parsedBy
+        + (j.llmError ? ' • LLM error: ' + j.llmError : '')
+        + (j.truncated ? ' • result truncated' : '');
+      placeholder.appendChild(m);
+    }
+    scrollToEnd();
   } catch (e) {
-    placeholder.innerHTML = '<div class="bubble"><span class="err">Network error: ' + escapeHtml(e.message) + '</span></div>';
+    placeholder.querySelector('.body').innerHTML = '<div class="text"><span class="err">Network error: ' + escapeHtml(e.message) + '</span></div>';
   }
 }
 
-sendBtn.onclick = function() {
+function send() {
   const t = input.value.trim();
   if (!t) return;
   input.value = '';
+  autosize();
   ask(t);
-};
-input.addEventListener('keydown', function(e){ if (e.key === 'Enter') sendBtn.click(); });
+  lastUserQuery = t;
+  const refineEl = document.getElementById('refineToggle');
+  const refineLabel = document.getElementById('refineLabel');
+  if (refineEl) {
+    refineEl.checked = false;
+    refineEl.disabled = false;
+    refineLabel.classList.remove('disabled','active');
+  }
+}
+sendBtn.onclick = send;
+input.addEventListener('keydown', function(e){
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+
+// Suggestion chips
+document.querySelectorAll('.chip').forEach(function(c){
+  c.addEventListener('click', function(){
+    if (input.disabled) return;
+    input.value = c.dataset.q;
+    autosize();
+    send();
+  });
+});
+
+let lastUserQuery = '';
+document.getElementById('refineToggle').addEventListener('change', function(){
+  const lbl = document.getElementById('refineLabel');
+  if (this.checked) lbl.classList.add('active'); else lbl.classList.remove('active');
+});
 
 checkHealth();
 setInterval(checkHealth, 10000);
