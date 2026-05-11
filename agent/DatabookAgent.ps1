@@ -714,8 +714,19 @@ B. Keyword scan (use when the user asks for "all/any/every X", or X is a part
    code, or you cannot tell which table applies):
 {
   "mode": "keyword",
-  "keyword": "TVS"
+  "keyword": "TVS",
+  "mustContain": ["hub", "3.3"]
 }
+   - "keyword" is a SINGLE most-distinctive token used in SQL LIKE %keyword%
+     across every table.
+   - "mustContain" (optional) is a list of EXTRA narrowing terms. Rows are
+     post-filtered so EVERY one of these substrings must appear in some text
+     column (Description / Type / SubType / Comments / Application).
+     Examples:
+       "USB hub IC working at 3.3V" -> keyword="USB", mustContain=["hub","3.3"]
+       "low-power LDO with enable"  -> keyword="LDO", mustContain=["enable"]
+   Use mustContain whenever the user provides multiple distinctive constraints
+   that don't map to a structured filter.
 
 C. Direct answer (use when the user is asking a FACTUAL or CONCEPTUAL question
    about a part rather than asking to find parts -- e.g. "what is the clamping
@@ -796,10 +807,18 @@ If nothing useful can be done, reply with {"mode": "none"}.
         if ($mode -eq 'keyword' -and $j.keyword) {
             $script:LastLlmError = $null
             $script:LastLlmOkAt  = Get-Date
+            $must = @()
+            if ($j.PSObject.Properties.Name -contains 'mustContain' -and $j.mustContain) {
+                foreach ($m in @($j.mustContain)) {
+                    $s = [string]$m
+                    if ($s) { $must += $s }
+                }
+            }
             return @{
                 mode = 'keyword'
                 keyword = [string]$j.keyword
-                intent = "LLM-parsed: keyword scan for '$($j.keyword)'"
+                mustContain = $must
+                intent = "LLM-parsed: keyword scan for '$($j.keyword)'" + ($(if($must){' narrowed by ['+(($must) -join ', ')+']'}else{''}))
             }
         }
         if ($mode -eq 'answer' -and $j.answer) {
@@ -1387,6 +1406,33 @@ try {
                         }
 
                         $rows = @($rowsList.ToArray())
+
+                        # mustContain post-filter (LLM-supplied narrowing terms).
+                        # ALL terms must appear (case-insensitive substring) in
+                        # at least one text field of each row. Lets the LLM
+                        # combine a broad SQL keyword with cheap row-level AND.
+                        if ($parsed.mustContain -and $parsed.mustContain.Count -gt 0 -and $rows.Count -gt 0) {
+                            $terms = @($parsed.mustContain | ForEach-Object { ([string]$_).ToLower() } | Where-Object { $_ })
+                            if ($terms.Count -gt 0) {
+                                $before = $rows.Count
+                                $filtered = New-Object System.Collections.ArrayList
+                                foreach ($r in $rows) {
+                                    $allHit = $true
+                                    foreach ($term in $terms) {
+                                        $found = $false
+                                        foreach ($p in $r.PSObject.Properties) {
+                                            $v = $p.Value
+                                            if ($null -eq $v) { continue }
+                                            if (([string]$v).ToLower().Contains($term)) { $found = $true; break }
+                                        }
+                                        if (-not $found) { $allHit = $false; break }
+                                    }
+                                    if ($allHit) { [void]$filtered.Add($r) }
+                                }
+                                $rows = @($filtered.ToArray())
+                                Write-Log "mustContain post-filter on [$($terms -join ', ')] kept $($rows.Count) of $before rows" 'CHAT'
+                            }
+                        }
 
                         # If this was a refinement, narrow the result set so the new
                         # term must appear in one of the row's text-ish fields.
