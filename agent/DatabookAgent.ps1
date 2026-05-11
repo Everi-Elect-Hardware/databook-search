@@ -1332,6 +1332,65 @@ try {
 
                         $truncated = ($rows.Count -ge $MaxRows)
                         $baseReply = Format-ChatReply -Parsed $parsed -Rows $rows -Truncated $truncated
+
+                        # If the user explicitly asked for a "datasheet" / "data sheet"
+                        # of a specific part, follow up with an LLM call that uses the
+                        # row's Description (and igtmpn/mpnhttp if present) to suggest
+                        # web datasheet links. The DxDatabook Datasheet field for most
+                        # tables is just an internal PDF filename, which is rarely
+                        # useful to the engineer.
+                        $datasheetNote = $null
+                        if ($rows.Count -ge 1 -and $rows.Count -le 5 `
+                            -and ($effectiveText -match '(?i)\b(data\s*sheet|datasheet)\b') `
+                            -and $GitHubToken) {
+                            try {
+                                $rowSummary = @()
+                                foreach ($rr in $rows) {
+                                    $bits = @()
+                                    foreach ($pn in 'IGTPartNo','Description','igtmpn','mpnhttp','Device','PKG_TYPE','Value','Voltage','Tolerance','Datasheet') {
+                                        if ($rr.PSObject.Properties.Name -contains $pn -and $rr.$pn) {
+                                            $bits += "$pn=$($rr.$pn)"
+                                        }
+                                    }
+                                    $rowSummary += '  - ' + ($bits -join '; ')
+                                }
+                                $followPrompt = @"
+You are helping an electrical engineer find a manufacturer datasheet for an IGT part.
+The IGT database row(s) below describe the part(s). The "Datasheet" field is an
+internal PDF filename and is NOT a web link. If `igtmpn` or `mpnhttp` is present,
+they hold the manufacturer part number / URL.
+
+Given the Description (e.g. "CAP,CER,.1UF,50V,X5R,20%,0402"), produce a short
+helpful reply (2-4 sentences) that:
+  1. Restates what the part is in plain English.
+  2. Suggests the most likely manufacturer part number(s) if you can infer a
+     standard industry match from the spec (e.g. 0.1uF 50V X5R 20% 0402 ->
+     common matches: Murata GRM155R61H104MA88, Samsung CL05A104MA5NNNC, TDK
+     C1005X5R1H104K050BB). Be honest if no specific MPN can be inferred.
+  3. Provides a clickable manufacturer-website search link or a Google search
+     URL like https://www.google.com/search?q=<URL-encoded query>.
+Use plain text -- no JSON.
+
+Row data:
+$($rowSummary -join "`n")
+"@
+                                $fbody = @{
+                                    model = $script:GitHubModel
+                                    messages = @(
+                                        @{ role='system'; content='You are a helpful electrical-engineering assistant.' },
+                                        @{ role='user';   content=$followPrompt }
+                                    )
+                                    temperature = 0.2
+                                } | ConvertTo-Json -Depth 8
+                                $fresp = Invoke-CurlPostJson -Url $script:GitHubModelsUrl -BodyJson $fbody -BearerToken $script:GitHubToken -TimeoutSec 30
+                                if ($fresp -and $fresp.choices -and $fresp.choices[0].message.content) {
+                                    $datasheetNote = [string]$fresp.choices[0].message.content
+                                }
+                            } catch {
+                                Write-Log "Datasheet follow-up LLM call failed: $_" 'WARN'
+                            }
+                        }
+
                         # Echo how we interpreted the query so 'fresh' vs 'refine' is visible.
                         $interp = if ($reqMode -eq 'refine' -and $prevQuery) {
                             "Refining previous ('$prevQuery') with '$userText'"
@@ -1360,6 +1419,7 @@ try {
                             rowCount = $rows.Count
                             truncated = $truncated
                             rows = $rows
+                            datasheetNote = $datasheetNote
                         } -Origin $origin
                     } catch {
                         Write-Log "Chat query rejected: $_" 'WARN'

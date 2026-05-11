@@ -280,6 +280,10 @@
       padding: 1px 8px;
     }
     .more-note { padding: 6px 12px; font-size: 11px; color: var(--fg-mut); border-top: 1px solid var(--border); background: var(--bg-soft); }
+    .ds-note { margin-top: 10px; border: 1px solid var(--border); border-left: 3px solid var(--acc); border-radius: 8px; background: var(--bg-soft); padding: 10px 12px; font-size: 13px; line-height: 1.5; }
+    .ds-note-head { font-weight: 600; color: var(--acc); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+    .ds-note-body { white-space: pre-wrap; color: var(--fg); }
+    .ds-note-body a { color: var(--acc); }
     details.sql-det { margin-top: 8px; }
     .text.muted { color: var(--fg-mut); font-style: italic; }
 
@@ -630,6 +634,15 @@ function formatReply(j) {
   let html = '';
   if (interp) html += '<div class="interp">' + escapeHtml(interp) + '</div>';
   html += renderResults(j);
+  if (j.datasheetNote) {
+    // Convert plain URLs in the note to clickable links, otherwise escape.
+    const safe = escapeHtml(j.datasheetNote).replace(
+      /(https?:\/\/[^\s<]+)/g,
+      '<a href="$1" target="_blank" rel="noopener">$1</a>'
+    );
+    html += '<div class="ds-note"><div class="ds-note-head">Datasheet hint</div>'
+          + '<div class="ds-note-body">' + safe + '</div></div>';
+  }
   if (j.sql) html += '<details class="sql-det"><summary>SQL</summary><code>' + escapeHtml(j.sql) + '</code></details>';
   return html;
 }
