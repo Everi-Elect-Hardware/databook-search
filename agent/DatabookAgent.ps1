@@ -515,7 +515,12 @@ function Invoke-LlmParser {
         Invoke-RuleParser, or $null on failure. On failure, sets
         $script:LastLlmError so /health and /chat can surface the cause.
     #>
-    param([string]$Text)
+    param(
+        [string]$Text,
+        # Optional prior chat turns to give the LLM follow-up context.
+        # Each item: @{ role='user'|'assistant'; content='...' }
+        $History = @()
+    )
     if (-not $script:GitHubToken) {
         $script:LastLlmError = 'no token configured'
         return $null
@@ -590,12 +595,24 @@ B. Keyword scan (use when the user asks for "all/any/every X", or X is a part
 If nothing useful can be done, reply with {"mode": "none"}.
 "@
 
+    $msgs = @(@{ role='system'; content=$sys })
+    # Cap prior turns to last 6 exchanges to keep tokens low.
+    if ($History) {
+        $hist = @($History)
+        if ($hist.Count -gt 12) { $hist = $hist[($hist.Count-12)..($hist.Count-1)] }
+        foreach ($h in $hist) {
+            $role = [string]$h.role
+            $content = [string]$h.content
+            if ($role -and $content -and ($role -eq 'user' -or $role -eq 'assistant')) {
+                $msgs += @{ role=$role; content=$content }
+            }
+        }
+    }
+    $msgs += @{ role='user'; content=$Text }
+
     $body = @{
         model = $script:GitHubModel
-        messages = @(
-            @{ role='system'; content=$sys },
-            @{ role='user';   content=$Text }
-        )
+        messages = $msgs
         temperature = 0
         response_format = @{ type='json_object' }
     } | ConvertTo-Json -Depth 8
@@ -1027,7 +1044,11 @@ try {
                     } else {
                         Write-Log "CHAT: $userText" 'CHAT'
                     }
-                    $parsed = Invoke-LlmParser -Text $effectiveText
+                    # Optional conversation history -- last N user/assistant turns.
+                    # Used to give the LLM follow-up context (ChatGPT-style).
+                    $history = @()
+                    if ($reqObj.history) { $history = @($reqObj.history) }
+                    $parsed = Invoke-LlmParser -Text $effectiveText -History $history
                     $usedLlm = $true
                     if (-not $parsed) {
                         $parsed = Invoke-RuleParser -Text $effectiveText
