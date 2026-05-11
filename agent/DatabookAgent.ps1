@@ -110,6 +110,91 @@ function Write-Log {
     Write-Host "[$ts][$Level] $Msg"
 }
 
+function Invoke-CurlPostJson {
+    <#
+        POST a JSON body to a URL using a freshly-constructed
+        System.Net.Http.HttpClient instance. We use this instead of
+        Invoke-RestMethod (which reuses a shared ServicePoint) because
+        long-running PowerShell processes hit "Unable to connect to the
+        remote server" errors after the ServicePoint pool sours. Each call
+        gets its own handler -> its own connection pool -> reliable.
+        Returns the parsed JSON object, or throws on failure.
+
+        Name kept for backwards compatibility, even though we no longer
+        shell out to curl.exe (blocked by some endpoint security tools).
+    #>
+    param(
+        [Parameter(Mandatory)] [string]$Url,
+        [Parameter(Mandatory)] [string]$BodyJson,
+        [string]$BearerToken,
+        [int]$TimeoutSec = 30
+    )
+    Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
+
+    # TLS hardening on the legacy ServicePointManager too, just in case
+    # the handler still consults it.
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor 3072
+    } catch {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    }
+
+    $attempt = 0
+    $maxAttempts = 3
+    $lastErr = $null
+    while ($attempt -lt $maxAttempts) {
+        $attempt++
+        $handler = New-Object System.Net.Http.HttpClientHandler
+        try {
+            try { $handler.UseProxy = $false } catch {}
+            try { $handler.AllowAutoRedirect = $true } catch {}
+            try { $handler.SslProtocols = [System.Security.Authentication.SslProtocols]::Tls12 } catch {}
+        } catch {}
+
+        $client = New-Object System.Net.Http.HttpClient($handler)
+        try {
+            $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSec)
+            $req = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Post, $Url)
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($BodyJson)
+            $bcontent = New-Object System.Net.Http.ByteArrayContent(,$bytes)
+            $bcontent.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse('application/json; charset=utf-8')
+            $req.Content = $bcontent
+            if ($BearerToken) {
+                $req.Headers.Authorization = New-Object System.Net.Http.Headers.AuthenticationHeaderValue('Bearer', $BearerToken)
+            }
+            $req.Headers.Accept.Add((New-Object System.Net.Http.Headers.MediaTypeWithQualityHeaderValue('application/json')))
+
+            try {
+                $resp = $client.SendAsync($req).GetAwaiter().GetResult()
+                $text = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+            } catch {
+                # Unwrap AggregateException so we get a real message.
+                $ex = $_.Exception
+                while ($ex.InnerException) { $ex = $ex.InnerException }
+                throw $ex
+            }
+
+            if (-not $resp.IsSuccessStatusCode) {
+                $code = [int]$resp.StatusCode
+                $snippet = if ($text) { $text.Substring(0, [Math]::Min(300, $text.Length)) } else { '' }
+                throw "HTTP $code : $snippet"
+            }
+            if (-not $text) { throw "Empty response body" }
+            try { return ($text | ConvertFrom-Json) }
+            catch { throw "Non-JSON response: $($text.Substring(0, [Math]::Min(200, $text.Length)))" }
+        } catch {
+            $lastErr = $_
+            if ($attempt -lt $maxAttempts) {
+                Start-Sleep -Milliseconds (200 * $attempt)
+            }
+        } finally {
+            try { $client.Dispose() } catch {}
+            try { $handler.Dispose() } catch {}
+        }
+    }
+    throw $lastErr
+}
+
 function Test-SafeIdentifier {
     param([string]$Name)
     # Identifiers must be alphanumeric/underscore only, length 1..64.
@@ -648,40 +733,12 @@ If nothing useful can be done, reply with {"mode": "none"}.
     } | ConvertTo-Json -Depth 8
 
     try {
-        # Re-assert TLS 1.2 every call - some Windows networks drop the
-        # ServicePoint after idle and the process settles back to the default.
-        try {
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor 3072
-        } catch {
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        }
-        # Disable the inherited system web proxy: in some corporate environments
-        # the auto-detected proxy in a long-running process starts failing
-        # silently with "Unable to connect to the remote server".
-        try { [System.Net.WebRequest]::DefaultWebProxy = $null } catch {}
-
-        $headers = @{
-            Authorization  = "Bearer $script:GitHubToken"
-            'Content-Type' = 'application/json'
-            'Accept'       = 'application/json'
-        }
-
-        $resp = $null
-        $lastErr = $null
-        # Up to 2 attempts: connection drops after idle should recover on retry.
-        for ($i = 1; $i -le 2 -and -not $resp; $i++) {
-            try {
-                $resp = Invoke-RestMethod -Uri $script:GitHubModelsUrl `
-                    -Method Post -Headers $headers -Body $body -TimeoutSec 30
-            } catch {
-                $lastErr = $_
-                if ($i -lt 2) {
-                    Write-Log "LLM call attempt $i failed, retrying: $($_.Exception.Message)" 'WARN'
-                    Start-Sleep -Milliseconds 400
-                }
-            }
-        }
-        if (-not $resp) { throw $lastErr }
+        # Use curl.exe (ships with Windows 10/11) for the LLM call. The
+        # in-process .NET HTTP stack in long-running PowerShell jobs is
+        # unreliable on this network -- a fresh OS-level TLS connection
+        # via curl is dramatically more stable than ServicePoint reuse.
+        $resp = Invoke-CurlPostJson -Url $script:GitHubModelsUrl -BodyJson $body -BearerToken $script:GitHubToken -TimeoutSec 30
+        if (-not $resp) { throw "curl returned no response" }
 
         $content = $resp.choices[0].message.content
         $j = $content | ConvertFrom-Json
@@ -755,11 +812,7 @@ function Test-LlmConnection {
             max_tokens = 1
             temperature = 0
         } | ConvertTo-Json -Depth 5
-        $null = Invoke-RestMethod -Uri $script:GitHubModelsUrl -Method Post -Body $body -TimeoutSec 8 -Headers @{
-            Authorization = "Bearer $script:GitHubToken"
-            'Content-Type' = 'application/json'
-            'Accept'       = 'application/json'
-        }
+        $null = Invoke-CurlPostJson -Url $script:GitHubModelsUrl -BodyJson $body -BearerToken $script:GitHubToken -TimeoutSec 8
         $result.ok = $true
         $script:LastLlmError = $null
     } catch {
@@ -994,11 +1047,7 @@ try {
                             messages = @(@{ role='user'; content='Reply with just the word PONG.' })
                             temperature = 0
                         } | ConvertTo-Json -Depth 5
-                        $resp = Invoke-RestMethod -Uri $GitHubModelsUrl -Method Post -Body $body -TimeoutSec 20 -Headers @{
-                            Authorization = "Bearer $GitHubToken"
-                            'Content-Type' = 'application/json'
-                            'Accept'       = 'application/json'
-                        }
+                        $resp = Invoke-CurlPostJson -Url $GitHubModelsUrl -BodyJson $body -BearerToken $GitHubToken -TimeoutSec 20
                         Send-Json -Context $ctx -Status 200 -Obj @{
                             ok = $true
                             model = $GitHubModel
