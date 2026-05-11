@@ -1273,15 +1273,18 @@ try {
                     $history = @()
                     if ($reqObj.history) { $history = @($reqObj.history) }
 
-                    # Hard short-circuit: if the user typed a bare 7-9 digit IGT
-                    # part number, just look it up directly across every table.
-                    # This bypasses LLM/firewall flakiness for the most common
-                    # "datasheet for <pn>" / "info on <pn>" follow-up case.
+                    # Hard short-circuit: if the user typed an IGT part number,
+                    # just look it up directly across every table. Bypasses LLM
+                    # /firewall flakiness for the most common follow-up case.
+                    # Accepted shapes (real DxDatabook examples):
+                    #   - bare 7-9 digits, optional trailing letter: 15244091, 32908891W
+                    #   - dashed legacy codes: 42-1438-01E, 47464894-1
                     $bareParts = @()
-                    foreach ($m in [regex]::Matches($effectiveText, '\b(\d{7,9})\b')) {
+                    $partRegex = '\b(\d{2,4}-\d{3,5}-\d{1,3}[A-Z]?|\d{7,9}[A-Z]?(?:-\d+)?)\b'
+                    foreach ($m in [regex]::Matches($effectiveText, $partRegex)) {
                         $bareParts += $m.Groups[1].Value
                     }
-                    $bareParts = $bareParts | Select-Object -Unique
+                    $bareParts = @($bareParts | Select-Object -Unique)
                     if ($bareParts.Count -ge 1) {
                         $directRows = New-Object System.Collections.ArrayList
                         foreach ($pn in $bareParts) {
