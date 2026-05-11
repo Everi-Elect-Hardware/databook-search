@@ -126,7 +126,9 @@ function Invoke-CurlPostJson {
         [Parameter(Mandatory)] [string]$Url,
         [Parameter(Mandatory)] [string]$BodyJson,
         [string]$BearerToken,
-        [int]$TimeoutSec = 30
+        [int]$TimeoutSec = 30,
+        [int]$MaxOuterAttempts = 2,
+        [int]$MaxInnerAttempts = 4
     )
 
     $psExe = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
@@ -157,7 +159,7 @@ try { [System.Net.WebRequest]::DefaultWebProxy = `$null } catch {}
         }
         $childScript += @"
 `$lastErr = `$null
-for (`$i = 1; `$i -le 4; `$i++) {
+for (`$i = 1; `$i -le $MaxInnerAttempts; `$i++) {
   try {
     `$resp = Invoke-WebRequest -Uri '$Url' -Method Post -Body `$bodyText -Headers `$headers -TimeoutSec $TimeoutSec -UseBasicParsing
     [Console]::Out.Write(`$resp.Content)
@@ -195,7 +197,7 @@ exit 1
             # Up to 2 fresh subprocess attempts. The Windows firewall on this
             # endpoint randomly blocks short-lived outbound sockets too, but
             # a brand-new process on a 2-second cooldown usually succeeds.
-            for ($attempt = 1; $attempt -le 2; $attempt++) {
+            for ($attempt = 1; $attempt -le $MaxOuterAttempts; $attempt++) {
                 $proc = [System.Diagnostics.Process]::Start($psi)
                 if (-not $proc.WaitForExit(($TimeoutSec + 5) * 1000)) {
                     try { $proc.Kill() } catch {}
@@ -209,7 +211,7 @@ exit 1
                 $lastChildErr = if ($stdout.StartsWith('ERR:')) { $stdout.Substring(4) } else { $stderr }
                 # Don't retry on auth/limit errors -- they will not improve.
                 if ($lastChildErr -match '401|403|404|429') { break }
-                if ($attempt -lt 2) { Start-Sleep -Milliseconds 1500 }
+                if ($attempt -lt $MaxOuterAttempts) { Start-Sleep -Milliseconds 1500 }
             }
 
             if ($exit -ne 0 -or $stdout.StartsWith('ERR:')) {
@@ -981,6 +983,46 @@ function Invoke-KeywordSearch {
     return @($all.ToArray())
 }
 
+function Find-PartByNumber {
+    <#
+        Universal IGTPartNo lookup across every live-discovered table. Used
+        when the user types a bare 7-9 digit IGT part number (e.g.
+        "datasheet for 15244091") -- we never want to depend on the LLM for
+        something this mechanical.
+    #>
+    param([Parameter(Mandatory)][string]$PartNo)
+    if (-not (Test-SafeValue $PartNo)) { throw "Part number rejected by safety filter." }
+    $all = New-Object System.Collections.ArrayList
+    $tableSource = if ($script:AllTables -and $script:AllTables.Count -gt 0) {
+        $script:AllTables
+    } else {
+        $fallback = @{}
+        foreach ($k in $Schema.Keys) { $fallback[$k] = @{ all = $Schema[$k]; text = $Schema[$k] } }
+        $fallback
+    }
+    foreach ($table in $tableSource.Keys) {
+        $allCols = $tableSource[$table].all
+        if (-not ($allCols -contains 'IGTPartNo')) { continue }
+        $selCols = @()
+        foreach ($c in 'IGTPartNo','Description','Type','SubType','PKG_TYPE','Package','Device','Value','Voltage','Tolerance','State','Datasheet','igtmpn','mpnhttp') {
+            if ($allCols -contains $c) { $selCols += $c }
+        }
+        if (-not $selCols -or $selCols.Count -eq 0) { $selCols = @($allCols | Select-Object -First 8) }
+        $selList = ($selCols | ForEach-Object { "[$_]" }) -join ', '
+        $sql = "SELECT TOP 5 $selList FROM [dbo].[$table] WHERE [IGTPartNo] = ?"
+        try {
+            $rows = Invoke-SafeQuery -Sql $sql -Params @($PartNo)
+            foreach ($r in $rows) {
+                $r | Add-Member -NotePropertyName '_source' -NotePropertyValue $table -Force
+                [void]$all.Add($r)
+            }
+        } catch {
+            Write-Log "Part lookup on $table skipped: $_" 'WARN'
+        }
+    }
+    return @($all.ToArray())
+}
+
 function Format-ChatReply {
     param($Parsed, $Rows, $Truncated)
 
@@ -1211,11 +1253,39 @@ try {
                     # Used to give the LLM follow-up context (ChatGPT-style).
                     $history = @()
                     if ($reqObj.history) { $history = @($reqObj.history) }
-                    $parsed = Invoke-LlmParser -Text $effectiveText -History $history
-                    $usedLlm = $true
-                    if (-not $parsed) {
-                        $parsed = Invoke-RuleParser -Text $effectiveText
+
+                    # Hard short-circuit: if the user typed a bare 7-9 digit IGT
+                    # part number, just look it up directly across every table.
+                    # This bypasses LLM/firewall flakiness for the most common
+                    # "datasheet for <pn>" / "info on <pn>" follow-up case.
+                    $bareParts = @()
+                    foreach ($m in [regex]::Matches($effectiveText, '\b(\d{7,9})\b')) {
+                        $bareParts += $m.Groups[1].Value
+                    }
+                    $bareParts = $bareParts | Select-Object -Unique
+                    if ($bareParts.Count -ge 1) {
+                        $directRows = New-Object System.Collections.ArrayList
+                        foreach ($pn in $bareParts) {
+                            foreach ($r in (Find-PartByNumber -PartNo $pn)) {
+                                [void]$directRows.Add($r)
+                            }
+                        }
+                        $parsed = @{
+                            table   = $null
+                            filters = @(@{ column='IGTPartNo'; op='IN'; value=($bareParts -join ',') })
+                            columns = @('IGTPartNo','Description','Datasheet')
+                            intent  = "Direct part-number lookup: $($bareParts -join ', ')"
+                            mode    = 'structured'
+                            _directRows = @($directRows.ToArray())
+                        }
                         $usedLlm = $false
+                    } else {
+                        $parsed = Invoke-LlmParser -Text $effectiveText -History $history
+                        $usedLlm = $true
+                        if (-not $parsed) {
+                            $parsed = Invoke-RuleParser -Text $effectiveText
+                            $usedLlm = $false
+                        }
                     }
                     if (-not $parsed) {
                         # Final fallback: try a universal keyword scan from whatever
@@ -1254,7 +1324,15 @@ try {
                         }
 
                         # Path A: structured query (when parser identified a table)
-                        if ($parsed.table -and (-not $parsed.mode -or $parsed.mode -eq 'structured')) {
+                        if ($parsed._directRows) {
+                            # Direct part-number short-circuit: rows already fetched
+                            # by Find-PartByNumber across every table.
+                            $builtSql = "<direct IGTPartNo lookup across all tables>"
+                            foreach ($r in $parsed._directRows) {
+                                [void]$rowsList.Add($r)
+                            }
+                        }
+                        elseif ($parsed.table -and (-not $parsed.mode -or $parsed.mode -eq 'structured')) {
                             $built = Build-Search $parsed
                             $builtSql = $built.Sql
                             Write-Log "SQL: $builtSql" 'SQL'
@@ -1382,7 +1460,10 @@ $($rowSummary -join "`n")
                                     )
                                     temperature = 0.2
                                 } | ConvertTo-Json -Depth 8
-                                $fresp = Invoke-CurlPostJson -Url $script:GitHubModelsUrl -BodyJson $fbody -BearerToken $script:GitHubToken -TimeoutSec 30
+                                # Fail fast: the user already has DB rows. If the
+                                # LLM is currently firewall-blocked, don't make them
+                                # wait through several retries.
+                                $fresp = Invoke-CurlPostJson -Url $script:GitHubModelsUrl -BodyJson $fbody -BearerToken $script:GitHubToken -TimeoutSec 12 -MaxOuterAttempts 1 -MaxInnerAttempts 2
                                 if ($fresp -and $fresp.choices -and $fresp.choices[0].message.content) {
                                     $datasheetNote = [string]$fresp.choices[0].message.content
                                 }
