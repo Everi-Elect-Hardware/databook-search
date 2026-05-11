@@ -66,6 +66,11 @@ try {
 } catch {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 }
+# Some corporate proxy auto-discovery breaks down inside a long-running
+# process; default to no proxy (the OS already has direct access).
+try { [System.Net.WebRequest]::DefaultWebProxy = $null } catch {}
+# Refresh DNS every 30s instead of caching it for the life of the process.
+try { [System.Net.ServicePointManager]::DnsRefreshTimeout = 30000 } catch {}
 
 # ---------------------------------------------------------------------------
 # 1. Whitelist of tables and the columns we will allow filters on.
@@ -604,6 +609,19 @@ C. Direct answer (use when the user is asking a FACTUAL or CONCEPTUAL question
   "answer": "SRDA3.3 is a 3.3V uni-directional TVS diode array. Its typical clamping voltage at 1A is around 9V; see the Littelfuse SRDA3.3 datasheet for exact numbers."
 }
 
+STRONG HINTS FOR mode=answer (use answer mode, NOT keyword/structured, when):
+- The query starts with "what is", "what's", "how does", "how do", "why",
+  "explain", "tell me about", "is this", "does this", "can this".
+- The query asks for a SPEC of a specific IGT part number (8-digit code,
+  optionally trailing letter, e.g. "32083091", "48017191W") -- e.g. "operating
+  voltage", "clamping voltage", "current rating", "package", "footprint",
+  "function", "datasheet", "description" of a specific part number.
+- The query contains typos that look like spec words ("operretion", "claming",
+  "voltge") -- still treat as a spec question, do NOT use the typo as a
+  database keyword.
+In these cases, draw on conversation history (prior search rows often include
+the part's Description, Type, Value) and reply with a concise prose answer.
+
 If nothing useful can be done, reply with {"mode": "none"}.
 "@
 
@@ -630,14 +648,41 @@ If nothing useful can be done, reply with {"mode": "none"}.
     } | ConvertTo-Json -Depth 8
 
     try {
-        $resp = Invoke-RestMethod -Uri $script:GitHubModelsUrl `
-            -Method Post `
-            -Headers @{
-                Authorization = "Bearer $script:GitHubToken"
-                'Content-Type' = 'application/json'
-                'Accept'       = 'application/json'
-            } `
-            -Body $body -TimeoutSec 30
+        # Re-assert TLS 1.2 every call - some Windows networks drop the
+        # ServicePoint after idle and the process settles back to the default.
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor 3072
+        } catch {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        }
+        # Disable the inherited system web proxy: in some corporate environments
+        # the auto-detected proxy in a long-running process starts failing
+        # silently with "Unable to connect to the remote server".
+        try { [System.Net.WebRequest]::DefaultWebProxy = $null } catch {}
+
+        $headers = @{
+            Authorization  = "Bearer $script:GitHubToken"
+            'Content-Type' = 'application/json'
+            'Accept'       = 'application/json'
+        }
+
+        $resp = $null
+        $lastErr = $null
+        # Up to 2 attempts: connection drops after idle should recover on retry.
+        for ($i = 1; $i -le 2 -and -not $resp; $i++) {
+            try {
+                $resp = Invoke-RestMethod -Uri $script:GitHubModelsUrl `
+                    -Method Post -Headers $headers -Body $body -TimeoutSec 30
+            } catch {
+                $lastErr = $_
+                if ($i -lt 2) {
+                    Write-Log "LLM call attempt $i failed, retrying: $($_.Exception.Message)" 'WARN'
+                    Start-Sleep -Milliseconds 400
+                }
+            }
+        }
+        if (-not $resp) { throw $lastErr }
+
         $content = $resp.choices[0].message.content
         $j = $content | ConvertFrom-Json
         $mode = if ($j.PSObject.Properties.Name -contains 'mode' -and $j.mode) { [string]$j.mode } else { 'structured' }
