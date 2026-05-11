@@ -1507,7 +1507,7 @@ try {
                         # useful to the engineer.
                         $datasheetNote = $null
                         if ($rows.Count -ge 1 -and $rows.Count -le 5 `
-                            -and ($effectiveText -match '(?i)\b(data\s*sheet|datasheet)\b') `
+                            -and ($effectiveText -match '(?i)\b(data\s*sheet|datasheet|datsheet|datsheets|specs?)\b') `
                             -and $GitHubToken) {
                             try {
                                 $rowSummary = @()
@@ -1558,6 +1558,34 @@ $($rowSummary -join "`n")
                             } catch {
                                 Write-Log "Datasheet follow-up LLM call failed: $_" 'WARN'
                             }
+                        }
+
+                        # Fallback datasheet hint when the LLM was unavailable
+                        # (firewall block, timeout, etc). At minimum produce a
+                        # Google search link from each row's Description so the
+                        # user always has a one-click route to the manufacturer
+                        # datasheet.
+                        if (-not $datasheetNote `
+                            -and $rows.Count -ge 1 -and $rows.Count -le 5 `
+                            -and ($effectiveText -match '(?i)\b(data\s*sheet|datasheet|datsheet|datsheets|specs?)\b')) {
+                            $lines = New-Object System.Collections.ArrayList
+                            [void]$lines.Add("LLM hint unavailable -- here are direct web search links built from the part description(s):")
+                            foreach ($rr in $rows) {
+                                $pn   = if ($rr.PSObject.Properties.Name -contains 'IGTPartNo')   { [string]$rr.IGTPartNo }   else { '' }
+                                $desc = if ($rr.PSObject.Properties.Name -contains 'Description') { [string]$rr.Description } else { '' }
+                                $mpnh = if ($rr.PSObject.Properties.Name -contains 'mpnhttp')     { [string]$rr.mpnhttp }     else { '' }
+                                $igtm = if ($rr.PSObject.Properties.Name -contains 'igtmpn')      { [string]$rr.igtmpn }      else { '' }
+                                $q    = if ($desc) { "$desc datasheet" } else { "$pn datasheet" }
+                                $enc  = [System.Uri]::EscapeDataString($q)
+                                $url  = "https://www.google.com/search?q=$enc"
+                                $bits = @("- $pn")
+                                if ($desc) { $bits += "($desc)" }
+                                if ($igtm) { $bits += "MFG PN: $igtm" }
+                                if ($mpnh) { $bits += "MFG URL: $mpnh" }
+                                $bits += "Search: $url"
+                                [void]$lines.Add(($bits -join '  '))
+                            }
+                            $datasheetNote = ($lines -join "`n")
                         }
 
                         # Echo how we interpreted the query so 'fresh' vs 'refine' is visible.
