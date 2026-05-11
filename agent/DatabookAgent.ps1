@@ -939,6 +939,36 @@ function Get-DistinctiveKeyword {
     return $null
 }
 
+function Get-NarrowingTerms {
+    <#
+        Pull EVERY distinctive token from the user's free text -- used as
+        AND post-filter terms when the LLM isn't available to populate
+        mustContain. Excludes generic stopwords and the chosen primary
+        keyword. Voltage rails like "3.3v" / "5v" are kept verbatim because
+        they're highly distinctive.
+    #>
+    param(
+        [string]$Text,
+        [string]$Keyword
+    )
+    if (-not $Text) { return @() }
+    $stop = @('the','and','for','with','any','all','show','list','find','give','need','want','please','part','parts','from','that','this','better','than','smaller','smallest','larger','largest','more','less','cheaper','cheapest','around','about','have','some','what','which','where','when','near','data','sheet','datasheet','spec','specs','tell','info','information','description','package','rating','operating','operation','impedance','clamping','working','use','using','able','can','does','will','would','should','must','must','need','small','large','low','high','wit','at')
+    $kwLower = if ($Keyword) { $Keyword.ToLower() } else { '' }
+    $terms = New-Object System.Collections.ArrayList
+    # Tokenize allowing dots & dashes inside (so 3.3v / 5v / 0603 / SOT-23 survive).
+    foreach ($raw in [regex]::Split($Text, '[\s,;:()/\\]+')) {
+        if (-not $raw) { continue }
+        $tok = $raw.Trim('.','!','?').ToLower()
+        if ($tok.Length -lt 2) { continue }
+        if ($stop -contains $tok) { continue }
+        if ($tok -eq $kwLower) { continue }
+        # Skip plain words <3 chars or pure punctuation.
+        if ($tok -notmatch '[a-z0-9]') { continue }
+        if (-not $terms.Contains($tok)) { [void]$terms.Add($tok) }
+    }
+    return @($terms.ToArray())
+}
+
 function Invoke-KeywordSearch {
     <#
         Universal keyword scan across every whitelisted table. For each table,
@@ -1414,8 +1444,17 @@ try {
                         # ALL terms must appear (case-insensitive substring) in
                         # at least one text field of each row. Lets the LLM
                         # combine a broad SQL keyword with cheap row-level AND.
-                        if ($parsed.mustContain -and $parsed.mustContain.Count -gt 0 -and $rows.Count -gt 0) {
-                            $terms = @($parsed.mustContain | ForEach-Object { ([string]$_).ToLower() } | Where-Object { $_ })
+                        $must = @()
+                        if ($parsed.mustContain) { $must = @($parsed.mustContain) }
+                        # If no LLM-supplied narrowing, derive from the user text
+                        # whenever a broad keyword scan ran. This is what saves us
+                        # when the LLM is firewall-blocked: "usb hub ic 3.3v" still
+                        # post-filters to rows containing 'hub' AND '3.3v' AND 'ic'.
+                        if ($must.Count -eq 0 -and $kwUsed) {
+                            $must = Get-NarrowingTerms -Text $effectiveText -Keyword $kwUsed
+                        }
+                        if ($must.Count -gt 0 -and $rows.Count -gt 0) {
+                            $terms = @($must | ForEach-Object { ([string]$_).ToLower() } | Where-Object { $_ })
                             if ($terms.Count -gt 0) {
                                 $before = $rows.Count
                                 $filtered = New-Object System.Collections.ArrayList
