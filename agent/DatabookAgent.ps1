@@ -910,7 +910,7 @@ function Get-DistinctiveKeyword {
         if ($known -contains $w) { return $w }
     }
 
-    $stop = @('the','and','for','with','any','all','show','list','find','give','need','want','please','part','parts','from','that','this','better','than','smaller','smallest','larger','largest','more','less','cheaper','cheapest','around','about','need','wants','have','some','what','which','where','when','about','near')
+    $stop = @('the','and','for','with','any','all','show','list','find','give','need','want','please','part','parts','from','that','this','better','than','smaller','smallest','larger','largest','more','less','cheaper','cheapest','around','about','need','wants','have','some','what','which','where','when','about','near','data','sheet','datasheet','spec','specs','tell','about','info','information','description','package','value','voltage','current','tolerance','rating','operating','operation','impedance','clamping')
     $words = $Text -split '[^a-zA-Z]+' | Where-Object { $_.Length -ge 4 -and ($stop -notcontains $_.ToLower()) }
     if ($words) {
         return ($words | Sort-Object { $_.Length } -Descending | Select-Object -First 1)
@@ -1271,6 +1271,21 @@ try {
                         $wantsBroad = ($effectiveText -match '(?i)\b(all|any|every|list|show|find|search)\b')
                         $forceKw    = ($parsed.mode -eq 'keyword')
                         $sparseHit  = ($rowsList.Count -lt 3)
+                        # If the structured query was an exact part-number lookup,
+                        # treat 0 or 1 hit as complete -- don't pollute results
+                        # with a noisy keyword scan ("data sheet" -> 'sheet'
+                        # matching random Descriptions across other tables).
+                        $exactPartLookup = $false
+                        if ($parsed.filters) {
+                            foreach ($f in @($parsed.filters)) {
+                                if ($f.column -eq 'IGTPartNo' -and ($f.op -eq '=' -or $f.op -eq 'IN')) {
+                                    $exactPartLookup = $true
+                                    break
+                                }
+                            }
+                        }
+                        if ($exactPartLookup) { $sparseHit = $false; $wantsBroad = $false }
+
                         $kw = if ($forceKw) { [string]$parsed.keyword } else { Get-DistinctiveKeyword $effectiveText }
                         if ($kw -and ($forceKw -or $wantsBroad -or $sparseHit)) {
                             try {
