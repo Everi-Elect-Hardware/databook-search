@@ -575,9 +575,9 @@ KEYWORDS MUST BE SINGLE TOKENS, not phrases:
 The keyword is fed into LIKE %keyword% so multi-word phrases will not match.
 Prefer the single most distinctive noun or part-code token.
 
-Reply with ONLY a JSON object. Two shapes are allowed:
+Reply with ONLY a JSON object. Three shapes are allowed:
 
-A. Structured filter (use when you can identify a table and useful filters):
+A. Structured filter (use when the user asks you to FIND parts in the database):
 {
   "mode": "structured",
   "table": "Resistor",
@@ -590,6 +590,18 @@ B. Keyword scan (use when the user asks for "all/any/every X", or X is a part
 {
   "mode": "keyword",
   "keyword": "TVS"
+}
+
+C. Direct answer (use when the user is asking a FACTUAL or CONCEPTUAL question
+   about a part rather than asking to find parts -- e.g. "what is the clamping
+   voltage of 48017191W", "explain how a TVS diode works", "is SRDA3.3 unidirec-
+   tional?", "datasheet link for STM32F407", "what package is SOT-23-6". The
+   answer should be 1-4 short sentences, use any context from the conversation
+   history (prior search results, prior part numbers), and never invent specs --
+   if you don't know, say so and suggest the user check the datasheet:
+{
+  "mode": "answer",
+  "answer": "SRDA3.3 is a 3.3V uni-directional TVS diode array. Its typical clamping voltage at 1A is around 9V; see the Littelfuse SRDA3.3 datasheet for exact numbers."
 }
 
 If nothing useful can be done, reply with {"mode": "none"}.
@@ -636,6 +648,15 @@ If nothing useful can be done, reply with {"mode": "none"}.
                 mode = 'keyword'
                 keyword = [string]$j.keyword
                 intent = "LLM-parsed: keyword scan for '$($j.keyword)'"
+            }
+        }
+        if ($mode -eq 'answer' -and $j.answer) {
+            $script:LastLlmError = $null
+            $script:LastLlmOkAt  = Get-Date
+            return @{
+                mode = 'answer'
+                answer = [string]$j.answer
+                intent = 'LLM-parsed: direct answer'
             }
         }
         if (-not $j.table) { return $null }
@@ -1075,6 +1096,20 @@ try {
                         $builtSql = $null
                         $kwSql = $null
                         $kwUsed = $null
+
+                        # Path 0: direct LLM answer (factual / conceptual question --
+                        # no database lookup needed).
+                        if ($parsed.mode -eq 'answer' -and $parsed.answer) {
+                            Send-Json -Context $ctx -Status 200 -Obj @{
+                                ok = $true
+                                reply = [string]$parsed.answer
+                                parsed = $parsed
+                                parsedBy = if ($usedLlm) { 'llm' } else { 'rules' }
+                                rows = @()
+                                mode = 'answer'
+                            } -Origin $origin
+                            break
+                        }
 
                         # Path A: structured query (when parser identified a table)
                         if ($parsed.table -and (-not $parsed.mode -or $parsed.mode -eq 'structured')) {

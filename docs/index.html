@@ -602,6 +602,13 @@ function renderResults(j) {
 }
 
 function formatReply(j) {
+  // Direct answer mode: server short-circuited the DB lookup and gave us
+  // a Copilot-style prose reply. Render as a clean text bubble (no SQL,
+  // no rows table, no interpretation chip).
+  if (j && j.mode === 'answer') {
+    return '<div class="text answer">' + escapeHtml(j.reply || '') + '</div>';
+  }
+
   // Parse optional [interpretation] prefix the agent prepends.
   let interp = '';
   let body = j.reply || '';
@@ -755,6 +762,7 @@ async function ask(text) {
 function buildAssistantContext(j) {
   if (!j) return '(no reply)';
   if (j.error) return 'Error: ' + j.error;
+  if (j.mode === 'answer') return String(j.reply || '');
   const rows = j.rows || [];
   if (rows.length === 0) return 'No matches.';
   const groups = {};
