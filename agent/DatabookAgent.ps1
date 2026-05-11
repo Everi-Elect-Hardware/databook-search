@@ -138,8 +138,9 @@ function Invoke-CurlPostJson {
     try {
         [System.IO.File]::WriteAllText($tmpBody, $BodyJson, [System.Text.UTF8Encoding]::new($false))
 
-        # Child script: read body file, POST it, write raw response (or
-        # "ERR:..." on failure) to stdout, exit.
+        # Child script: read body file, POST it with up to 3 internal
+        # retries (the corporate firewall intermittently blocks fresh
+        # outbound sockets too), write raw response or "ERR:..." to stdout.
         $childScript = @"
 `$ErrorActionPreference = 'Stop'
 try {
@@ -155,18 +156,25 @@ try { [System.Net.WebRequest]::DefaultWebProxy = `$null } catch {}
             $childScript += "`n`$headers['Authorization'] = 'Bearer $BearerToken'`n"
         }
         $childScript += @"
-try {
-  `$resp = Invoke-WebRequest -Uri '$Url' -Method Post -Body `$bodyText -Headers `$headers -TimeoutSec $TimeoutSec -UseBasicParsing
-  [Console]::Out.Write(`$resp.Content)
-  exit 0
-} catch {
-  `$msg = `$_.Exception.Message
-  `$detail = `$null
-  try { `$detail = `$_.ErrorDetails.Message } catch {}
-  if (`$detail) { [Console]::Out.Write('ERR:' + `$msg + ' :: ' + `$detail) }
-  else        { [Console]::Out.Write('ERR:' + `$msg) }
-  exit 1
+`$lastErr = `$null
+for (`$i = 1; `$i -le 4; `$i++) {
+  try {
+    `$resp = Invoke-WebRequest -Uri '$Url' -Method Post -Body `$bodyText -Headers `$headers -TimeoutSec $TimeoutSec -UseBasicParsing
+    [Console]::Out.Write(`$resp.Content)
+    exit 0
+  } catch {
+    `$lastErr = `$_
+    `$msg = `$_.Exception.Message
+    if (`$msg -match '401|403|404|429|5\d\d') { break }
+    Start-Sleep -Milliseconds (300 * `$i)
+  }
 }
+`$msg = `$lastErr.Exception.Message
+`$detail = `$null
+try { `$detail = `$lastErr.ErrorDetails.Message } catch {}
+if (`$detail) { [Console]::Out.Write('ERR:' + `$msg + ' :: ' + `$detail) }
+else        { [Console]::Out.Write('ERR:' + `$msg) }
+exit 1
 "@
         $tmpScript = [System.IO.Path]::GetTempFileName() + '.ps1'
         [System.IO.File]::WriteAllText($tmpScript, $childScript, [System.Text.UTF8Encoding]::new($false))
@@ -180,18 +188,32 @@ try {
             $psi.UseShellExecute = $false
             $psi.CreateNoWindow  = $true
 
-            $proc = [System.Diagnostics.Process]::Start($psi)
-            if (-not $proc.WaitForExit(($TimeoutSec + 5) * 1000)) {
-                try { $proc.Kill() } catch {}
-                throw "Child process timed out after ${TimeoutSec}s"
+            $stdout = ''
+            $stderr = ''
+            $exit = -1
+            $lastChildErr = $null
+            # Up to 2 fresh subprocess attempts. The Windows firewall on this
+            # endpoint randomly blocks short-lived outbound sockets too, but
+            # a brand-new process on a 2-second cooldown usually succeeds.
+            for ($attempt = 1; $attempt -le 2; $attempt++) {
+                $proc = [System.Diagnostics.Process]::Start($psi)
+                if (-not $proc.WaitForExit(($TimeoutSec + 5) * 1000)) {
+                    try { $proc.Kill() } catch {}
+                    $lastChildErr = "Child process timed out after ${TimeoutSec}s"
+                    continue
+                }
+                $stdout = $proc.StandardOutput.ReadToEnd()
+                $stderr = $proc.StandardError.ReadToEnd()
+                $exit   = $proc.ExitCode
+                if ($exit -eq 0 -and -not $stdout.StartsWith('ERR:')) { break }
+                $lastChildErr = if ($stdout.StartsWith('ERR:')) { $stdout.Substring(4) } else { $stderr }
+                # Don't retry on auth/limit errors -- they will not improve.
+                if ($lastChildErr -match '401|403|404|429') { break }
+                if ($attempt -lt 2) { Start-Sleep -Milliseconds 1500 }
             }
-            $stdout = $proc.StandardOutput.ReadToEnd()
-            $stderr = $proc.StandardError.ReadToEnd()
-            $exit   = $proc.ExitCode
 
             if ($exit -ne 0 -or $stdout.StartsWith('ERR:')) {
-                $err = if ($stdout.StartsWith('ERR:')) { $stdout.Substring(4) } else { $stderr }
-                throw $err
+                throw $lastChildErr
             }
             if (-not $stdout) { throw "Empty response body" }
             try { return ($stdout | ConvertFrom-Json) }
