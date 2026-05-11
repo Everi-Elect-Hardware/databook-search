@@ -59,6 +59,14 @@ if (-not $GitHubToken) {
     }
 }
 
+# PowerShell 5.1 defaults to TLS 1.0/1.1 which models.github.ai rejects.
+# Force TLS 1.2 + 1.3 for every outbound HTTPS call in this process.
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor 3072
+} catch {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+}
+
 # ---------------------------------------------------------------------------
 # 1. Whitelist of tables and the columns we will allow filters on.
 #    Add/remove freely - anything not here is rejected.
@@ -514,20 +522,53 @@ function Invoke-LlmParser {
     }
 
     $schemaText = ($Schema.GetEnumerator() | ForEach-Object { "$($_.Key): $($_.Value -join ', ')" }) -join "`n"
+    # Also tell the model what other tables exist (auto-discovered) so it can
+    # emit mode=keyword for things like Oscillator, IC-Digital, Microprocessors,
+    # Switch, Display, Battery, etc. even though structured queries are only
+    # allowed on the curated $Schema list.
+    $otherTables = @()
+    if ($script:AllTables -and $script:AllTables.Count -gt 0) {
+        foreach ($t in ($script:AllTables.Keys | Sort-Object)) {
+            if (-not $Schema.ContainsKey($t)) { $otherTables += $t }
+        }
+    }
+    $otherTablesNote = if ($otherTables.Count -gt 0) {
+        "Other component tables (keyword scan only, no structured filters): $($otherTables -join ', ')"
+    } else { '' }
     $sys = @"
 You convert engineer queries into JSON filters for IGT's electronic-component database.
 Allowed tables and their columns:
 $schemaText
 
+$otherTablesNote
+
 Operators allowed: =, LIKE, <, <=, >, >=, <>, IN
 Numeric values use exact strings (no quotes). For LIKE, include % wildcards.
 
 Important storage notes:
-- Resistor.Value is raw ohms (e.g. "4700" for 4.7k).
-- Capacitor.Value is farads in scientific notation (e.g. "1E-07" for 100nF).
-  For capacitor value queries use a >= and <= range around the target.
+- Resistor.Value is raw ohms as a string (e.g. "4700" for 4.7k, "10000" for 10k).
+- Capacitor.Value is a FLOAT column holding farads (e.g. 1E-07 for 100nF,
+  1E-09 for 1nF, 1E-05 for 10uF). Use op "=" with the scientific value as a
+  bare string:
+    100nF -> filters: [{"column":"Value","op":"=","value":"1E-07"}]
+    1nF   -> filters: [{"column":"Value","op":"=","value":"1E-09"}]
+    10uF  -> filters: [{"column":"Value","op":"=","value":"1E-05"}]
+  DO NOT use LIKE on Capacitor.Value -- it is float, LIKE will fail.
+- Voltage / Current / Tolerance columns are stored as VARCHAR strings (e.g.
+  "50", "16", "1%"). For an exact target like "50V" emit op "=" with value
+  "50". DO NOT use >= or <= on these columns -- string comparison is lexical
+  and "50" >= "6" is false. Only use < <= > >= when the user explicitly
+  asks for a range AND when you express the threshold so it makes sense as
+  lexical compare (rarely useful -- prefer "=").
 - Diode.Type is a short code: SHTKY, TVS, ZNR, RECT, SIGNAL, SW, ARRAY, BRDG, REF.
 - PKG_TYPE values are exact labels like 0603, SOT-23, DO-35, SO-8.
+
+KEYWORDS MUST BE SINGLE TOKENS, not phrases:
+- "USB hub IC in a small package" -> keyword: "USB" (not "USB hub IC")
+- "find me oscillators around 16MHz" -> keyword: "oscillator" (or use structured table=Oscillator if listed)
+- "any STM32 part" -> keyword: "STM32"
+The keyword is fed into LIKE %keyword% so multi-word phrases will not match.
+Prefer the single most distinctive noun or part-code token.
 
 Reply with ONLY a JSON object. Two shapes are allowed:
 
@@ -685,7 +726,7 @@ function Get-DistinctiveKeyword {
         if ($known -contains $w) { return $w }
     }
 
-    $stop = @('the','and','for','with','any','all','show','list','find','give','need','want','please','part','parts','from','that','this')
+    $stop = @('the','and','for','with','any','all','show','list','find','give','need','want','please','part','parts','from','that','this','better','than','smaller','smallest','larger','largest','more','less','cheaper','cheapest','around','about','need','wants','have','some','what','which','where','when','about','near')
     $words = $Text -split '[^a-zA-Z]+' | Where-Object { $_.Length -ge 4 -and ($stop -notcontains $_.ToLower()) }
     if ($words) {
         return ($words | Sort-Object { $_.Length } -Descending | Select-Object -First 1)
