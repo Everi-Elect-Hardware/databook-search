@@ -27,8 +27,9 @@ param(
     [int]    $CmdTimeoutSec   = 10,
     # Folder holding the static CSV snapshots used for Altium 501-xxxxx-xx
     # matching (Altium_Combined.csv, Unified_Library.csv). Defaults to
-    # ..\data relative to this script.
-    [string] $DataDir         = (Join-Path (Split-Path $PSScriptRoot -Parent) 'data'),
+    # ..\data relative to this script (resolved below - $PSScriptRoot can
+    # be empty depending on how the launcher re-invokes this script).
+    [string] $DataDir         = '',
     # Origins allowed to call the agent (CORS).
     # Add your GitHub Pages URL(s) here. Example values for Everi-Elect-Hardware:
     #   public repo Pages:    https://everi-elect-hardware.github.io
@@ -49,11 +50,23 @@ param(
 )
 
 # ---------------------------------------------------------------------------
-# 0. Token loader: pick first available source.
+# 0. Resolve this script's own directory robustly. $PSScriptRoot can be
+#    empty depending on how the launcher re-invokes this script (seen with
+#    some AppLocker/nested `powershell -File` setups), so fall back to
+#    $MyInvocation before giving up to the current working directory.
+# ---------------------------------------------------------------------------
+$ScriptDir = $PSScriptRoot
+if (-not $ScriptDir) { $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
+if (-not $ScriptDir) { $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition }
+if (-not $ScriptDir) { $ScriptDir = (Get-Location).Path }
+if (-not $DataDir)   { $DataDir = Join-Path (Split-Path $ScriptDir -Parent) 'data' }
+
+# ---------------------------------------------------------------------------
+# 1. Token loader: pick first available source.
 # ---------------------------------------------------------------------------
 if (-not $GitHubToken) { $GitHubToken = $env:GITHUB_TOKEN }
 if (-not $GitHubToken) {
-    $envFile = Join-Path $PSScriptRoot '.env'
+    $envFile = Join-Path $ScriptDir '.env'
     if (Test-Path $envFile) {
         Get-Content $envFile | ForEach-Object {
             if ($_ -match '^\s*GITHUB_TOKEN\s*=\s*(.+?)\s*$') {
