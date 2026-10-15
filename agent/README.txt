@@ -33,14 +33,10 @@ First-time setup (30 seconds)
        https://everi-elect-hardware.github.io/databook-search/
    - The pill at the top should turn green ("Agent: ok").
 
-3. (Optional) Enable the LLM parser for fuzzy queries:
-   - Generate a fine-grained GitHub PAT at
-       https://github.com/settings/personal-access-tokens
-     with the "Models: read" scope.
-   - Edit  %LOCALAPPDATA%\DatabookAgent\.env
-     and set:
-       GITHUB_TOKEN=github_pat_xxxxxxxxxxxxxxxxxxxxxxxxxxxx
-   - Restart start.cmd.  The "LLM" pill should turn green.
+3. The LLM parser (fuzzy natural-language queries) is enabled automatically.
+   A shared, scoped-down token (Models: read only, no repo access) is
+   mirrored to your machine by the launcher. The "LLM" pill should turn
+   green on its own. If it stays red/off, just re-run the launcher.
 
 To stop the agent
 -----------------
@@ -64,8 +60,8 @@ Troubleshooting
     Check that nothing else is using port 5005.
 
 - "LLM: error - 401 ..." pill:
-    Your GitHub token expired.  Generate a new one (see step 3 above).
-    Search still works via the rule-based parser in the meantime.
+    The shared token expired or was rotated.  Contact Eduard Kliger to
+    refresh it.  Search still works via the rule-based parser meanwhile.
 
 Contact
 -------

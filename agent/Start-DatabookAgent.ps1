@@ -5,9 +5,12 @@
 #      Z:\LIBRARY\MentorGraphics\DatabookAgent\Start-DatabookAgent.ps1
 #
 #  On launch it:
-#    1. Mirrors DatabookAgent.ps1 + .env.example + README.txt into
+#    1. Mirrors DatabookAgent.ps1 + .env.example + README.txt + .env into
 #       %LOCALAPPDATA%\DatabookAgent\  (only when the source copy is
 #       newer than what's already there).
+#       NOTE: .env now mirrors a shared, scoped-down GitHub token so the
+#       whole team gets the LLM parser with zero per-user setup. See
+#       data/README.md for the token's scope/rotation policy.
 #    2. Runs the LOCAL copy with PowerShell.
 #
 #  Why .ps1 and not .cmd?
@@ -39,8 +42,10 @@ if (-not (Test-Path $dest)) {
     New-Item -ItemType Directory -Path $dest -Force | Out-Null
 }
 
-# Mirror master files only when source is newer.  Skip .env (user-private).
-$files = @('DatabookAgent.ps1', '.env.example', 'README.txt')
+# Mirror master files only when source is newer. .env is included so the
+# shared team token distributes automatically - rotate it by replacing
+# the source .env on the share; every launch re-syncs it.
+$files = @('DatabookAgent.ps1', '.env.example', 'README.txt', '.env')
 foreach ($f in $files) {
     $s = Join-Path $src $f
     $d = Join-Path $dest $f
@@ -57,12 +62,9 @@ foreach ($f in $files) {
     }
 }
 
-# Do NOT auto-seed .env from .env.example - the example contains a placeholder
-# token that would make the agent report "LLM: error" instead of "LLM: off".
-# Users opt-in to LLM by creating .env themselves (see README).
 $envFile = Join-Path $dest '.env'
 if (-not (Test-Path $envFile)) {
-    Write-Host "  (no .env found - LLM parser disabled; copy .env.example to .env and add a token to enable it)"
+    Write-Host "  (no .env found - LLM parser disabled; ask Eduard Kliger about the shared token)"
 }
 
 $agent = Join-Path $dest 'DatabookAgent.ps1'
