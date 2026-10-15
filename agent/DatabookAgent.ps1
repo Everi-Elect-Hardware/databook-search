@@ -25,6 +25,10 @@ param(
     [string] $Dsn             = 'DxDatabook',
     [int]    $MaxRows         = 200,
     [int]    $CmdTimeoutSec   = 10,
+    # Folder holding the static CSV snapshots used for Altium 501-xxxxx-xx
+    # matching (Altium_Combined.csv, Unified_Library.csv). Defaults to
+    # ..\data relative to this script.
+    [string] $DataDir         = (Join-Path (Split-Path $PSScriptRoot -Parent) 'data'),
     # Origins allowed to call the agent (CORS).
     # Add your GitHub Pages URL(s) here. Example values for Everi-Elect-Hardware:
     #   public repo Pages:    https://everi-elect-hardware.github.io
@@ -583,12 +587,15 @@ function Invoke-RuleParser {
 
     # ----- Capacitor value: 0.1uF, 100nF, 22pF -> use range on farad-scientific column -----
     if ($table -eq 'Capacitor') {
-        if ($t -match '(\d+(?:\.\d+)?)\s*(uf|\xB5f|nf|pf|mf)') {
+        # Also accept Altium's bare-letter shorthand (10U, 100N, 22P) with no
+        # trailing "F" -- common in Comment/Description fields.
+        if ($t -match '(\d+(?:\.\d+)?)\s*(uf|\xB5f|nf|pf|mf|u|n|p)\b') {
             $n = [double]$matches[1]
-            $f = switch ($matches[2].ToLower()) {
-                'pf'         { $n * 1e-12 }
-                'nf'         { $n * 1e-9 }
-                { $_ -in 'uf','µf' } { $n * 1e-6 }
+            $unit = $matches[2].ToLower()
+            $f = switch ($unit) {
+                { $_ -in 'pf','p' }  { $n * 1e-12 }
+                { $_ -in 'nf','n' }  { $n * 1e-9 }
+                { $_ -in 'uf','µf','u' } { $n * 1e-6 }
                 'mf'         { $n * 1e-3 }
                 default      { $n }
             }
@@ -966,7 +973,8 @@ function Get-NarrowingTerms {
         if ($tok -notmatch '[a-z0-9]') { continue }
         if (-not $terms.Contains($tok)) { [void]$terms.Add($tok) }
     }
-    return @($terms.ToArray())
+    # Comma operator prevents the pipeline from unrolling a 1-element array to a bare scalar.
+    return ,@($terms.ToArray())
 }
 
 function Invoke-KeywordSearch {
@@ -1029,7 +1037,185 @@ function Invoke-KeywordSearch {
             Write-Log "Keyword scan on $table skipped: $_" 'WARN'
         }
     }
-    return @($all.ToArray())
+    # Comma operator prevents the pipeline from unrolling a 1-element array to a bare scalar.
+    return ,@($all.ToArray())
+}
+
+# ---------------------------------------------------------------------------
+# Altium 501-xxxxx-xx matching against static CSV snapshots.
+#
+# Independent of the live SQL connection - these CSVs are periodic exports
+# of DxDatabook + Altium library data (see data\README.md). Loaded once
+# and cached in-process; restart the agent to pick up refreshed files.
+# ---------------------------------------------------------------------------
+$script:AltiumCache  = $null
+$script:UnifiedCache = $null
+
+function Import-CsvDedup {
+    <#
+        Altium_Combined.csv has duplicate column headers (e.g. "Voltage
+        rating" appears twice), which makes PowerShell's native Import-Csv
+        throw "The member ... is already present." This parses the file
+        manually with TextFieldParser (proper quoted-CSV handling) and
+        renames any repeated header to Name_2, Name_3, ... so every row
+        becomes a valid PSCustomObject.
+    #>
+    param([Parameter(Mandatory)][string]$Path)
+    Add-Type -AssemblyName Microsoft.VisualBasic
+    $parser = New-Object Microsoft.VisualBasic.FileIO.TextFieldParser($Path)
+    $parser.TextFieldType = [Microsoft.VisualBasic.FileIO.FieldType]::Delimited
+    $parser.SetDelimiters(',')
+    $parser.HasFieldsEnclosedInQuotes = $true
+    $parser.TrimWhiteSpace = $false
+    $rows = New-Object System.Collections.ArrayList
+    $headers = $null
+    try {
+        while (-not $parser.EndOfData) {
+            $fields = $parser.ReadFields()
+            if ($null -eq $headers) {
+                $seen = @{}
+                $headers = foreach ($h in $fields) {
+                    $name = if ([string]::IsNullOrWhiteSpace($h)) { 'Col' } else { $h }
+                    if ($seen.ContainsKey($name)) {
+                        $seen[$name] = $seen[$name] + 1
+                        "${name}_$($seen[$name])"
+                    } else {
+                        $seen[$name] = 1
+                        $name
+                    }
+                }
+                continue
+            }
+            $obj = [ordered]@{}
+            for ($i = 0; $i -lt $headers.Count; $i++) {
+                $val = if ($i -lt $fields.Count) { $fields[$i] } else { '' }
+                $obj[$headers[$i]] = $val
+            }
+            [void]$rows.Add([pscustomobject]$obj)
+        }
+    } finally {
+        $parser.Close()
+    }
+    # Comma operator prevents the pipeline from unrolling a 1-element array to a bare scalar.
+    return ,@($rows.ToArray())
+}
+
+function Get-AltiumData {
+    if ($null -eq $script:AltiumCache) {
+        $path = Join-Path $DataDir 'Altium_Combined.csv'
+        if (Test-Path $path) {
+            $script:AltiumCache = Import-CsvDedup -Path $path
+            Write-Log "Loaded Altium_Combined.csv: $($script:AltiumCache.Count) rows"
+        } else {
+            $script:AltiumCache = @()
+            Write-Log "Altium_Combined.csv not found at $path" 'WARN'
+        }
+    }
+    return $script:AltiumCache
+}
+
+function Get-UnifiedLibraryData {
+    if ($null -eq $script:UnifiedCache) {
+        $path = Join-Path $DataDir 'Unified_Library.csv'
+        if (Test-Path $path) {
+            $script:UnifiedCache = Import-CsvDedup -Path $path
+            Write-Log "Loaded Unified_Library.csv: $($script:UnifiedCache.Count) rows"
+        } else {
+            $script:UnifiedCache = @()
+            Write-Log "Unified_Library.csv not found at $path" 'WARN'
+        }
+    }
+    return $script:UnifiedCache
+}
+
+function Find-Altium501Match {
+    <#
+        Matches an Altium/Agile 501-xxxxx-xx number (full or partial) against
+        the static Altium_Combined.csv snapshot (CMP_ID, Comment, Description
+        columns), then tries to cross-reference each hit into the live
+        DxDatabook via a keyword scan on the part's description/MPN so the
+        caller can see the corresponding IGT part number(s), if any.
+    #>
+    param([Parameter(Mandatory)][string]$Code)
+
+    if (-not (Test-SafeValue $Code)) { throw "Code rejected by safety filter." }
+    $needle = $Code.Trim()
+    if ($needle.Length -lt 3) { throw "Code too short - enter at least 3 characters." }
+    $needleLower = $needle.ToLower()
+
+    $altiumRows = @(Get-AltiumData | Where-Object {
+        ($_.Comment -and $_.Comment.ToLower().Contains($needleLower)) -or
+        ($_.CMP_ID  -and $_.CMP_ID.ToLower().Contains($needleLower))
+    } | Select-Object -First 50)
+
+    $results = New-Object System.Collections.ArrayList
+    foreach ($row in $altiumRows) {
+        $desc    = [string]$row.Description
+        $comment = [string]$row.Comment
+        $cmpId   = [string]$row.CMP_ID
+
+        $dbMatches = New-Object System.Collections.ArrayList
+        $seenPartNos = New-Object System.Collections.Generic.HashSet[string]
+
+        # Structured attempt first: parse the Altium Description the same way
+        # free-text chat queries are parsed. Catches value/package/tolerance/
+        # voltage specs that a single keyword can't (e.g. passives like
+        # "CAP CER 0.1UF 20% 50V Y5V 0603" have no distinctive keyword at all).
+        if ($desc) {
+            try {
+                $parsedDesc = Invoke-RuleParser -Text $desc
+                if ($parsedDesc -and $parsedDesc.table -and @($parsedDesc.filters).Count -gt 0) {
+                    # Tolerance notation differs between Altium ("20%") and
+                    # DxDatabook (e.g. "+80%-20%" for some capacitor types), so an
+                    # exact-match filter on it would wrongly exclude real matches.
+                    # Package/voltage/value are specific enough on their own.
+                    $structFilters = @($parsedDesc.filters | Where-Object { $_.column -ne 'Tolerance' })
+                    if ($structFilters.Count -gt 0) {
+                        $structReq = @{ table = $parsedDesc.table; columns = $parsedDesc.columns; filters = $structFilters }
+                        $built = Build-Search $structReq
+                        foreach ($r in (Invoke-SafeQuery -Sql $built.Sql -Params $built.Params)) {
+                            $pn = [string]$r.IGTPartNo
+                            if ($pn) { [void]$seenPartNos.Add($pn) }
+                            $r | Add-Member -NotePropertyName '_source' -NotePropertyValue $parsedDesc.table -Force
+                            [void]$dbMatches.Add($r)
+                        }
+                    }
+                }
+            } catch {
+                Write-Log "501-match structured parse failed for '$desc': $_" 'WARN'
+            }
+        }
+
+        # Prefer a manufacturer-part-code-looking Comment as the search term;
+        # otherwise fall back to the free-text Description. Adds to (not
+        # replaces) the structured results above, deduped by IGTPartNo.
+        $searchTerm = if ($comment -and $comment -notmatch '^\s*501-') { $comment } else { $desc }
+        if ($searchTerm -and $searchTerm.Length -ge 3) {
+            $kw = Get-DistinctiveKeyword $searchTerm
+            if ($kw) {
+                try {
+                    foreach ($r in (Invoke-KeywordSearch -Keyword $kw -PerTableMax 10)) {
+                        $pn = [string]$r.IGTPartNo
+                        if ($pn -and $seenPartNos.Contains($pn)) { continue }
+                        if ($pn) { [void]$seenPartNos.Add($pn) }
+                        [void]$dbMatches.Add($r)
+                    }
+                } catch {
+                    Write-Log "501-match keyword scan failed for '$kw': $_" 'WARN'
+                }
+            }
+        }
+
+        [void]$results.Add(@{
+            altiumCmpId       = $cmpId
+            altiumComment     = $comment
+            altiumDescription = $desc
+            databookMatchCount = $dbMatches.Count
+            databookMatches   = @($dbMatches.ToArray() | Select-Object -First 10)
+        })
+    }
+    # Comma operator prevents the pipeline from unrolling a 1-element array to a bare scalar.
+    return ,@($results.ToArray())
 }
 
 function Find-PartByNumber {
@@ -1069,7 +1255,8 @@ function Find-PartByNumber {
             Write-Log "Part lookup on $table skipped: $_" 'WARN'
         }
     }
-    return @($all.ToArray())
+    # Comma operator prevents the pipeline from unrolling a 1-element array to a bare scalar.
+    return ,@($all.ToArray())
 }
 
 function Format-ChatReply {
@@ -1621,6 +1808,34 @@ $($rowSummary -join "`n")
                     } catch {
                         Write-Log "Chat query rejected: $_" 'WARN'
                         Send-Json -Context $ctx -Status 400 -Obj @{ error = "$_"; parsed = $parsed } -Origin $origin
+                    }
+                    break
+                }
+
+                '^/match501$' {
+                    $code = $req.QueryString['code']
+                    if (-not $code -and $req.HttpMethod -eq 'POST') {
+                        $body = Read-RequestBody $ctx
+                        if ($body) {
+                            try { $reqObj = $body | ConvertFrom-Json; $code = [string]$reqObj.code } catch {}
+                        }
+                    }
+                    if (-not $code) {
+                        Send-Json -Context $ctx -Status 400 -Obj @{ error = 'code required: GET ?code=501-00559-00 or POST {"code":"..."}' } -Origin $origin
+                        break
+                    }
+                    try {
+                        Write-Log "501-match: $code" 'SQL'
+                        $matches = Find-Altium501Match -Code $code
+                        Send-Json -Context $ctx -Status 200 -Obj @{
+                            ok = $true
+                            code = $code
+                            matchCount = @($matches).Count
+                            matches = $matches
+                        } -Origin $origin
+                    } catch {
+                        Write-Log "501-match rejected: $_" 'WARN'
+                        Send-Json -Context $ctx -Status 400 -Obj @{ error = "$_" } -Origin $origin
                     }
                     break
                 }

@@ -435,6 +435,7 @@
   </button>
   <div class="brand" id="chatTitle" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">New chat</div>
   <span class="spacer"></span>
+  <button class="new-chat-btn" id="openMatch501" style="width:auto;margin:0;" title="Match an Altium/Agile 501-xxxxx-xx number to DxDatabook">501 Match</button>
   <span class="pill" id="llmPill" style="display:none;"></span>
   <span class="pill" id="userPill" style="display:none;"></span>
   <span class="pill" id="health"><span class="dot"></span><span id="healthText">Checking agent...</span></span>
@@ -474,6 +475,21 @@
 </div>
 
 </div><!-- /main-wrap -->
+
+<div id="match501Overlay" class="overlay" style="display:none;">
+  <div class="card" style="max-width:720px;width:92vw;">
+    <h2>Altium / Agile 501 Match</h2>
+    <p style="font-size:13px;color:var(--fg-mut);">Enter a full or partial Altium Agile number (e.g. <code>501-00559-00</code>) or an Altium Comment/MPN. Matches against the static Altium library snapshot, then cross-references each hit into DxDatabook.</p>
+    <div style="display:flex;gap:8px;margin:10px 0;">
+      <input id="match501Input" type="text" placeholder="501-00559-00" style="flex:1;padding:9px 12px;border-radius:8px;border:1px solid var(--border-strong);background:var(--bg);color:var(--fg);font-size:14px;" />
+      <button id="match501Go" class="send-btn" style="position:static;width:auto;padding:0 16px;border-radius:8px;">Match</button>
+    </div>
+    <div id="match501Results" style="max-height:55vh;overflow:auto;"></div>
+    <div class="actions">
+      <button class="secondary" id="closeMatch501">Close</button>
+    </div>
+  </div>
+</div>
 
 <div id="agentDown" class="overlay">
   <div class="card">
@@ -976,6 +992,61 @@ document.getElementById('menuBtn').onclick = function(){
 
 loadConversations();
 if (activeConv) loadConversation(activeConv.id); else renderSidebar();
+
+// ====================================================================
+// Altium / Agile 501 Match panel
+// ====================================================================
+function match501RowTable(rows) {
+  if (!rows || rows.length === 0) return '<div class="text muted" style="font-size:12px;">No DxDatabook cross-reference found.</div>';
+  const cols = pickColumns(rows);
+  if (cols.length === 0) return '';
+  const head = '<tr>' + cols.map(c => '<th>' + escapeHtml(c) + '</th>').join('') + '</tr>';
+  const body = rows.map(r => '<tr>' + cols.map(c => '<td>' + renderCell(c, r[c]) + '</td>').join('') + '</tr>').join('');
+  return '<div class="table-wrap"><table>' + head + body + '</table></div>';
+}
+
+function renderMatch501(j) {
+  const host = document.getElementById('match501Results');
+  if (!j || !j.matches || j.matches.length === 0) {
+    host.innerHTML = '<div class="text muted">No Altium library rows matched that code.</div>';
+    return;
+  }
+  host.innerHTML = j.matches.map(function(m){
+    return '<details class="grp" open>'
+      + '<summary><span class="grp-name">' + escapeHtml(m.altiumCmpId || '(no CMP_ID)') + ' &mdash; ' + escapeHtml(m.altiumComment || '') + '</span>'
+      + ' <span class="grp-count">' + (m.databookMatchCount || 0) + ' DxDatabook match(es)</span></summary>'
+      + '<div style="padding:8px 2px;font-size:13px;color:var(--fg-soft);">' + escapeHtml(m.altiumDescription || '') + '</div>'
+      + match501RowTable(m.databookMatches)
+      + '</details>';
+  }).join('');
+}
+
+async function runMatch501() {
+  const code = document.getElementById('match501Input').value.trim();
+  const host = document.getElementById('match501Results');
+  if (!code) { host.innerHTML = '<div class="text err">Enter a code first.</div>'; return; }
+  host.innerHTML = '<div class="text muted"><i>Matching against Altium library + DxDatabook…</i></div>';
+  try {
+    const r = await fetch(AGENT + '/match501?code=' + encodeURIComponent(code));
+    const j = await r.json();
+    if (j.error) { host.innerHTML = '<div class="text err">Error: ' + escapeHtml(j.error) + '</div>'; return; }
+    renderMatch501(j);
+  } catch (e) {
+    host.innerHTML = '<div class="text err">Network error: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+document.getElementById('openMatch501').onclick = function(){
+  document.getElementById('match501Overlay').style.display = 'flex';
+  document.getElementById('match501Input').focus();
+};
+document.getElementById('closeMatch501').onclick = function(){
+  document.getElementById('match501Overlay').style.display = 'none';
+};
+document.getElementById('match501Go').onclick = runMatch501;
+document.getElementById('match501Input').addEventListener('keydown', function(e){
+  if (e.key === 'Enter') { e.preventDefault(); runMatch501(); }
+});
 
 checkHealth();
 setInterval(checkHealth, 10000);
