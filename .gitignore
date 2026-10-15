@@ -1,0 +1,4 @@
+# Local secrets - never commit
+.env
+*.token
+agent/.env

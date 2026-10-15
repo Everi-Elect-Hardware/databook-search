@@ -1,0 +1,1055 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>IGT Databook</title>
+  <style>
+    /* ---------- Theme tokens (Claude / ChatGPT-inspired) ---------- */
+    :root {
+      --bg:         #ffffff;
+      --bg-soft:    #faf9f7;
+      --bg-elev:    #f4f3ef;
+      --border:     #e6e3dc;
+      --border-strong: #cfcbc1;
+      --fg:         #1f1e1c;
+      --fg-soft:    #5a5751;
+      --fg-mut:     #8a877f;
+      --acc:        #cc785c;       /* Claude clay */
+      --acc-hover:  #b46a51;
+      --user-bg:    #f0eee6;       /* warm cream user bubble */
+      --ok:         #2b7a3a;
+      --bad:        #c0392b;
+      --code-bg:    #f6f5f0;
+      --shadow:     0 1px 2px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.04);
+      --radius:     14px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg:         #1f1e1c;
+        --bg-soft:    #262522;
+        --bg-elev:    #2d2c28;
+        --border:     #3a3934;
+        --border-strong: #4a4843;
+        --fg:         #f5f4ef;
+        --fg-soft:    #c4c1b8;
+        --fg-mut:     #8a877f;
+        --acc:        #d4866b;
+        --acc-hover:  #e29478;
+        --user-bg:    #2d2c28;
+        --ok:         #5fc77a;
+        --bad:        #ef6b5a;
+        --code-bg:    #161513;
+        --shadow:     0 1px 2px rgba(0,0,0,0.2), 0 4px 16px rgba(0,0,0,0.2);
+      }
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: ui-sans-serif, -apple-system, "Segoe UI", "Inter", Roboto, sans-serif;
+      font-size: 15px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+    body { display: flex; flex-direction: row; }
+
+    /* ---------- Sidebar ---------- */
+    aside.sidebar {
+      width: 260px; flex: 0 0 260px;
+      background: var(--bg-soft);
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      height: 100vh;
+    }
+    .sb-head { padding: 12px 12px 8px 12px; display: flex; align-items: center; gap: 8px; }
+    .sb-head .brand { flex: 1; }
+    .new-chat-btn {
+      width: 100%;
+      margin: 0 12px 8px 12px;
+      box-sizing: border-box;
+      width: calc(100% - 24px);
+      background: var(--bg);
+      border: 1px solid var(--border-strong);
+      color: var(--fg);
+      border-radius: 10px;
+      padding: 9px 12px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex; align-items: center; gap: 8px;
+      transition: background .15s, border-color .15s;
+    }
+    .new-chat-btn:hover { background: var(--bg-elev); border-color: var(--acc); }
+    .new-chat-btn svg { width: 14px; height: 14px; }
+    .sb-list { flex: 1; overflow-y: auto; padding: 4px 8px 12px 8px; }
+    .sb-section { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--fg-mut); padding: 8px 6px 4px 6px; }
+    .sb-item {
+      display: flex; align-items: center; gap: 6px;
+      padding: 7px 10px;
+      border-radius: 8px;
+      font-size: 13px; color: var(--fg-soft);
+      cursor: pointer;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      transition: background .12s;
+      position: relative;
+    }
+    .sb-item:hover { background: var(--bg-elev); color: var(--fg); }
+    .sb-item.active { background: var(--bg-elev); color: var(--fg); }
+    .sb-item .title { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+    .sb-item .del {
+      opacity: 0; border: none; background: transparent; color: var(--fg-mut);
+      cursor: pointer; padding: 2px 4px; border-radius: 4px;
+      font-size: 14px; line-height: 1;
+    }
+    .sb-item:hover .del { opacity: 1; }
+    .sb-item .del:hover { background: var(--border); color: var(--bad); }
+    .sb-foot { border-top: 1px solid var(--border); padding: 10px 12px; font-size: 11px; color: var(--fg-mut); }
+
+    .main-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; height: 100vh; }
+
+    @media (max-width: 720px) {
+      aside.sidebar { position: fixed; left: 0; top: 0; bottom: 0; z-index: 30; transform: translateX(-100%); transition: transform .2s; }
+      aside.sidebar.open { transform: none; box-shadow: 0 0 30px rgba(0,0,0,0.4); }
+      .menu-btn { display: inline-flex !important; }
+    }
+
+    /* ---------- Top bar ---------- */
+    header {
+      position: sticky; top: 0; z-index: 5;
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 18px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+    }
+    .menu-btn { display: none; background: transparent; border: 1px solid var(--border); color: var(--fg); border-radius: 8px; padding: 5px 8px; cursor: pointer; }
+    .menu-btn svg { width: 16px; height: 16px; vertical-align: middle; }
+    .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; color: var(--fg); }
+    .brand .logo {
+      width: 22px; height: 22px; border-radius: 6px;
+      background: linear-gradient(135deg, var(--acc), #e09a82);
+      display: inline-flex; align-items: center; justify-content: center;
+      color: #fff; font-size: 11px; font-weight: 700;
+    }
+    .spacer { flex: 1; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px;
+      font-size: 12px; color: var(--fg-soft);
+      background: var(--bg-soft);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+    }
+    .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--bad); }
+    .pill.ok .dot { background: var(--ok); }
+    .pill.warn .dot { background: #d49a2a; }
+
+    /* ---------- Main scroll area ---------- */
+    main {
+      flex: 1; min-height: 0;
+      overflow-y: auto;
+      padding: 24px 16px 160px 16px;
+    }
+    .col { max-width: 760px; margin: 0 auto; }
+
+    /* ---------- Composer container fits within main-wrap ---------- */
+    .composer-wrap {
+      position: sticky; bottom: 0;
+      padding: 16px 16px 22px 16px;
+      background: linear-gradient(to top, var(--bg) 60%, rgba(255,255,255,0));
+      flex: 0 0 auto;
+    }
+
+    /* ---------- Welcome screen ---------- */
+    .welcome {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      min-height: 60vh;
+      text-align: center;
+      padding: 24px 12px;
+    }
+    .welcome h1 {
+      font-size: 28px; font-weight: 600;
+      margin: 0 0 8px 0;
+      letter-spacing: -0.01em;
+    }
+    .welcome p {
+      color: var(--fg-soft);
+      margin: 0 0 24px 0; max-width: 480px;
+    }
+    .chips {
+      display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
+      max-width: 640px;
+    }
+    .chip {
+      background: var(--bg-soft);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 14px;
+      font-size: 13px;
+      color: var(--fg-soft);
+      cursor: pointer;
+      transition: background .15s, border-color .15s, color .15s;
+    }
+    .chip:hover { background: var(--bg-elev); border-color: var(--border-strong); color: var(--fg); }
+
+    /* ---------- Messages ---------- */
+    .msg { margin: 18px 0; display: flex; flex-direction: column; animation: fadeIn .18s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+    .msg.me { align-items: flex-end; }
+    .msg.me .bubble {
+      background: var(--user-bg);
+      border: 1px solid var(--border);
+      color: var(--fg);
+      padding: 10px 14px;
+      border-radius: 18px 18px 4px 18px;
+      max-width: 80%;
+      white-space: pre-wrap;
+    }
+
+    .msg.bot { align-items: stretch; }
+    .msg.bot .row { display: flex; gap: 12px; align-items: flex-start; }
+    .avatar {
+      width: 28px; height: 28px; border-radius: 50%; flex: 0 0 28px;
+      background: linear-gradient(135deg, var(--acc), #e09a82);
+      color: #fff; font-size: 11px; font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      margin-top: 2px;
+    }
+    .msg.bot .body { flex: 1; min-width: 0; }
+    .msg.bot .body .interp {
+      font-size: 12px; color: var(--fg-mut);
+      margin-bottom: 6px;
+    }
+    .msg.bot .body .text { color: var(--fg); white-space: pre-wrap; word-wrap: break-word; }
+    .msg .meta { font-size: 11px; color: var(--fg-mut); margin-top: 6px; padding-left: 40px; }
+    .msg.me .meta { padding-left: 0; padding-right: 4px; }
+
+    .err { color: var(--bad); }
+
+    /* ---------- Result rendering ---------- */
+    .summary { font-size: 14px; color: var(--fg); margin: 2px 0 8px 0; }
+    .summary strong { font-weight: 600; }
+    .chips-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px 0; }
+    .src-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 3px 10px 3px 12px;
+      font-size: 12px;
+      color: var(--fg-soft);
+    }
+    .src-chip .n {
+      background: var(--acc);
+      color: #fff;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 1px 7px;
+      min-width: 18px; text-align: center;
+    }
+    .groups { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+    details.grp {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg-soft);
+      overflow: hidden;
+    }
+    details.grp > summary {
+      cursor: pointer; user-select: none; list-style: none;
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 12px;
+      font-size: 13px;
+      color: var(--fg);
+      background: var(--bg-elev);
+    }
+    details.grp[open] > summary { border-bottom: 1px solid var(--border); }
+    details.grp > summary::-webkit-details-marker { display: none; }
+    details.grp > summary::before { content: "▸"; color: var(--fg-mut); font-size: 11px; }
+    details.grp[open] > summary::before { content: "▾"; }
+    .grp-name { font-weight: 600; }
+    .grp-count {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--fg-soft);
+      border-radius: 999px;
+      font-size: 11px;
+      padding: 1px 8px;
+    }
+    .more-note { padding: 6px 12px; font-size: 11px; color: var(--fg-mut); border-top: 1px solid var(--border); background: var(--bg-soft); }
+    .ds-note { margin-top: 10px; border: 1px solid var(--border); border-left: 3px solid var(--acc); border-radius: 8px; background: var(--bg-soft); padding: 10px 12px; font-size: 13px; line-height: 1.5; }
+    .ds-note-head { font-weight: 600; color: var(--acc); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+    .ds-note-body { white-space: pre-wrap; color: var(--fg); }
+    .ds-note-body a { color: var(--acc); }
+    details.sql-det { margin-top: 8px; }
+    .text.muted { color: var(--fg-mut); font-style: italic; }
+
+    /* ---------- Tables & details ---------- */
+    details { margin-top: 10px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--bg-soft); }
+    details > summary {
+      cursor: pointer; user-select: none;
+      font-size: 12px; color: var(--fg-soft);
+      padding: 8px 12px;
+      background: var(--bg-soft);
+      list-style: none;
+    }
+    details[open] > summary { border-bottom: 1px solid var(--border); }
+    details > summary::-webkit-details-marker { display: none; }
+    details > summary::before { content: "▸ "; color: var(--fg-mut); }
+    details[open] > summary::before { content: "▾ "; }
+
+    .table-wrap { max-height: 420px; overflow: auto; }
+    table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+    th, td { padding: 6px 10px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--border); }
+    th { background: var(--bg-elev); font-weight: 600; color: var(--fg-soft); position: sticky; top: 0; }
+    tr:hover td { background: var(--bg-elev); }
+
+    code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12px; display: block; white-space: pre-wrap; word-break: break-all; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; color: var(--fg-soft); }
+
+    /* ---------- Composer (legacy fixed position - overridden above) ---------- */
+    .composer-wrap-legacy {
+      position: fixed; left: 0; right: 0; bottom: 0;
+      padding: 16px 16px 22px 16px;
+      background: linear-gradient(to top, var(--bg) 50%, rgba(255,255,255,0));
+      z-index: 4;
+    }
+    @media (prefers-color-scheme: dark) {
+      .composer-wrap { background: linear-gradient(to top, var(--bg) 50%, rgba(31,30,28,0)); }
+    }
+    .composer {
+      max-width: 760px; margin: 0 auto;
+      display: flex; flex-direction: column;
+      background: var(--bg-soft);
+      border: 1px solid var(--border-strong);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+      padding: 8px 8px 8px 16px;
+      transition: border-color .15s;
+    }
+    .composer:focus-within { border-color: var(--acc); }
+    .composer textarea {
+      flex: 1;
+      background: transparent;
+      color: var(--fg);
+      border: none; outline: none;
+      font: inherit;
+      resize: none;
+      min-height: 28px; max-height: 200px;
+      padding: 8px 0 4px 0;
+      width: 100%;
+    }
+    .composer textarea::placeholder { color: var(--fg-mut); }
+    .composer .row2 {
+      display: flex; align-items: center; gap: 10px;
+      padding-top: 4px;
+    }
+    .refine-toggle {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--fg-mut);
+      padding: 5px 10px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--bg);
+      cursor: pointer; user-select: none;
+      transition: all .15s;
+    }
+    .refine-toggle input { margin: 0; cursor: pointer; accent-color: var(--acc); }
+    .refine-toggle.active { color: var(--acc); border-color: var(--acc); background: rgba(204,120,92,0.08); }
+    .refine-toggle.disabled { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
+    .composer .grow { flex: 1; }
+    .send-btn {
+      width: 32px; height: 32px; border-radius: 50%; border: none;
+      background: var(--acc); color: #fff;
+      cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+      transition: background .15s, transform .1s;
+    }
+    .send-btn:hover:not(:disabled) { background: var(--acc-hover); }
+    .send-btn:active { transform: scale(0.95); }
+    .send-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    .send-btn svg { width: 16px; height: 16px; }
+
+    /* ---------- Overlay (agent down) ---------- */
+    .overlay {
+      position: fixed; inset: 0;
+      background: rgba(20,18,14,0.55);
+      backdrop-filter: blur(4px);
+      display: none; align-items: center; justify-content: center;
+      z-index: 20;
+    }
+    .overlay.show { display: flex; }
+    .card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      padding: 24px 26px;
+      max-width: 560px; width: 92%;
+    }
+    .card h2 { margin: 0 0 8px 0; font-size: 17px; font-weight: 600; color: var(--bad); }
+    .card p { margin: 8px 0; color: var(--fg-soft); }
+    .card .path { display: block; padding: 8px 10px; margin: 6px 0; user-select: all; font-family: ui-monospace, Consolas, monospace; font-size: 12px; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; word-break: break-all; }
+    .card ol { margin: 8px 0; padding-left: 22px; color: var(--fg-soft); }
+    .card .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+    .card .actions button {
+      background: var(--acc); color: #fff;
+      border: none; border-radius: 10px;
+      padding: 9px 14px; font-size: 13px; font-weight: 500;
+      cursor: pointer;
+    }
+    .card .actions button:hover { background: var(--acc-hover); }
+    .card .actions button.secondary { background: var(--bg-elev); color: var(--fg); border: 1px solid var(--border); }
+    .card .actions button.secondary:hover { background: var(--border); }
+    .toast { font-size: 11px; color: var(--ok); margin-left: 6px; opacity: 0; transition: opacity .2s; }
+    .toast.show { opacity: 1; }
+
+    /* hide welcome when chat has any user message */
+    main.has-chat .welcome { display: none; }
+  </style>
+</head>
+<body>
+
+<aside class="sidebar" id="sidebar">
+  <div class="sb-head">
+    <div class="brand"><span class="logo">IG</span> <span>IGT Databook</span></div>
+  </div>
+  <button class="new-chat-btn" id="newChatBtn" title="Start a new conversation">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    New chat
+  </button>
+  <div class="sb-list" id="sbList">
+    <div class="sb-section">Recent</div>
+    <div id="sbItems"></div>
+  </div>
+  <div class="sb-foot" id="sbFoot">Local read-only bridge to DxDatabook.</div>
+</aside>
+
+<div class="main-wrap">
+
+<header>
+  <button class="menu-btn" id="menuBtn" title="Conversations">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </button>
+  <div class="brand" id="chatTitle" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">New chat</div>
+  <span class="spacer"></span>
+  <button class="new-chat-btn" id="openMatch501" style="width:auto;margin:0;" title="Match an Altium/Agile 501-xxxxx-xx number to DxDatabook">501 Match</button>
+  <span class="pill" id="llmPill" style="display:none;"></span>
+  <span class="pill" id="userPill" style="display:none;"></span>
+  <span class="pill" id="health"><span class="dot"></span><span id="healthText">Checking agent...</span></span>
+</header>
+
+<main id="chat">
+  <div class="col">
+    <div class="welcome" id="welcome">
+      <h1>What part are you looking for?</h1>
+      <p>Ask in plain English &mdash; the agent searches every component table in DxDatabook and groups matches by family.</p>
+      <div class="chips">
+        <div class="chip" data-q="all TVS diodes">all TVS diodes</div>
+        <div class="chip" data-q="USB hub IC">USB hub IC</div>
+        <div class="chip" data-q="0603 1% 4.7k resistor">0603 1% 4.7k resistor</div>
+        <div class="chip" data-q="0.1uF 50V 0402 cap">0.1uF 50V 0402 cap</div>
+        <div class="chip" data-q="SOT-23-3 schottky diode">SOT-23-3 schottky</div>
+        <div class="chip" data-q="ferrite bead 1kOhm">ferrite bead 1kOhm</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div class="composer-wrap">
+  <div class="composer">
+    <textarea id="input" rows="1" placeholder="Describe the part you need..." autocomplete="off" disabled></textarea>
+    <div class="row2">
+      <label class="refine-toggle disabled" id="refineLabel" title="Combine your next message with the previous one (AND-filter). Default off = each query is a fresh search.">
+        <input type="checkbox" id="refineToggle" disabled />
+        <span>Refine previous</span>
+      </label>
+      <span class="grow"></span>
+      <button class="send-btn" id="send" disabled title="Send (Enter)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+</div><!-- /main-wrap -->
+
+<div id="match501Overlay" class="overlay" style="display:none;">
+  <div class="card" style="max-width:720px;width:92vw;">
+    <h2>Altium / Agile 501 Match</h2>
+    <p style="font-size:13px;color:var(--fg-mut);">Enter a full or partial Altium Agile number (e.g. <code>501-00559-00</code>) or an Altium Comment/MPN. Matches against the static Altium library snapshot, then cross-references each hit into DxDatabook.</p>
+    <div style="display:flex;gap:8px;margin:10px 0;">
+      <input id="match501Input" type="text" placeholder="501-00559-00" style="flex:1;padding:9px 12px;border-radius:8px;border:1px solid var(--border-strong);background:var(--bg);color:var(--fg);font-size:14px;" />
+      <button id="match501Go" class="send-btn" style="position:static;width:auto;padding:0 16px;border-radius:8px;">Match</button>
+    </div>
+    <div id="match501Results" style="max-height:55vh;overflow:auto;"></div>
+    <div class="actions">
+      <button class="secondary" id="closeMatch501">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="agentDown" class="overlay">
+  <div class="card">
+    <h2>Agent isn't running on this PC</h2>
+    <p>The chat page needs the local DatabookAgent (PowerShell) running on <code style="display:inline;padding:1px 4px;">localhost:5005</code> to reach DxDatabook. Pick the easiest option:</p>
+    <ol>
+      <li><strong>From the Mentor library share</strong> &mdash; right-click <code style="display:inline;padding:1px 4px;">Start-DatabookAgent.ps1</code> &rarr; <em>Run with PowerShell</em>:
+        <span class="path" id="sharePath">Z:\LIBRARY\MentorGraphics\DatabookAgent\Start-DatabookAgent.ps1</span></li>
+      <li><strong>Or paste this command</strong> into Win+R or a PowerShell prompt:
+        <span class="path" id="launchCmd">powershell.exe -NoProfile -ExecutionPolicy Bypass -File "Z:\LIBRARY\MentorGraphics\DatabookAgent\Start-DatabookAgent.ps1"</span></li>
+    </ol>
+    <div class="actions">
+      <button id="copyCmd">Copy launch command<span class="toast" id="copyToast">copied</span></button>
+      <button class="secondary" id="copyPath">Copy share path<span class="toast" id="copyPathToast">copied</span></button>
+      <button class="secondary" id="retryHealth">Retry</button>
+    </div>
+    <p style="font-size:12px;color:var(--fg-mut);margin-top:12px;">Once the agent is running, this dialog closes on its own.</p>
+  </div>
+</div>
+
+<script>
+const AGENT = 'http://localhost:5005';
+const main = document.getElementById('chat');
+const col  = main.querySelector('.col');
+const input = document.getElementById('input');
+const sendBtn = document.getElementById('send');
+
+// Cache the welcome card markup so we can restore it on "New chat".
+const welcomeEl = document.getElementById('welcome');
+const welcomeHTML = welcomeEl ? welcomeEl.outerHTML : '';
+
+function clearTranscript(showWelcome) {
+  col.innerHTML = showWelcome ? welcomeHTML : '';
+  // Re-wire suggestion chips if welcome was restored.
+  if (showWelcome) wireSuggestionChips();
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]); });
+}
+
+function autosize() {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+}
+input.addEventListener('input', autosize);
+
+function addUserMsg(text) {
+  const div = document.createElement('div');
+  div.className = 'msg me';
+  div.innerHTML = '<div class="bubble">' + escapeHtml(text) + '</div>';
+  col.appendChild(div);
+  scrollToEnd();
+  return div;
+}
+
+function addBotMsg(htmlContent) {
+  const div = document.createElement('div');
+  div.className = 'msg bot';
+  div.innerHTML = '<div class="row"><div class="avatar">IG</div><div class="body">' + htmlContent + '</div></div>';
+  col.appendChild(div);
+  scrollToEnd();
+  return div;
+}
+
+function scrollToEnd() { main.scrollTop = main.scrollHeight; }
+
+function pickColumns(rows) {
+  // Build the most informative column order from what's available.
+  const all = new Set();
+  rows.forEach(r => Object.keys(r).forEach(k => all.add(k)));
+  const preferred = ['IGTPartNo','Description','Value','Voltage','Tolerance','PKG_TYPE','Package','Type','SubType','Device','State','Datasheet'];
+  const cols = preferred.filter(c => all.has(c));
+  // Drop columns that are entirely empty in this group.
+  return cols.filter(c => rows.some(r => r[c] !== null && r[c] !== '' && r[c] !== undefined));
+}
+
+function renderCell(col, val) {
+  if (val == null || val === '') return '';
+  const s = String(val);
+  // Render Datasheet (and any URL-looking value) as a clickable link.
+  if (col === 'Datasheet' || /^https?:\/\//i.test(s)) {
+    if (/^https?:\/\//i.test(s)) {
+      return '<a href="' + escapeHtml(s) + '" target="_blank" rel="noopener">open &raquo;</a>';
+    }
+  }
+  return escapeHtml(s);
+}
+
+function groupTable(group, openByDefault) {
+  const rows = group.rows;
+  const cols = pickColumns(rows);
+  if (cols.length === 0) return '';
+  const head = '<tr>' + cols.map(c => '<th>' + escapeHtml(c) + '</th>').join('') + '</tr>';
+  const shown = rows.slice(0, 50);
+  const body = shown.map(r =>
+    '<tr>' + cols.map(c => '<td>' + renderCell(c, r[c]) + '</td>').join('') + '</tr>'
+  ).join('');
+  const more = rows.length > shown.length
+    ? '<div class="more-note">Showing first ' + shown.length + ' of ' + rows.length + ' rows in this group</div>'
+    : '';
+  return '<details class="grp"' + (openByDefault ? ' open' : '') + '>'
+    + '<summary><span class="grp-name">' + escapeHtml(group.name) + '</span>'
+    + ' <span class="grp-count">' + rows.length + '</span></summary>'
+    + '<div class="table-wrap"><table>' + head + body + '</table></div>'
+    + more + '</details>';
+}
+
+function renderResults(j) {
+  const rows = j.rows || [];
+  if (rows.length === 0) {
+    return '<div class="text muted">No matches in DxDatabook for that query.</div>';
+  }
+
+  // Group rows by _source (set by the agent's universal scan). Fall back to a
+  // single "results" group if absent (pure structured query).
+  const groups = new Map();
+  rows.forEach(r => {
+    const k = r._source || 'results';
+    if (!groups.has(k)) groups.set(k, []);
+    // Strip _source from the row so it doesn't clutter the table.
+    const { _source, ...rest } = r;
+    groups.get(k).push(rest);
+  });
+  const ordered = [...groups.entries()]
+    .map(([name, rs]) => ({ name, rows: rs }))
+    .sort((a, b) => b.rows.length - a.rows.length);
+
+  // Summary line
+  const total = rows.length;
+  const trunc = j.truncated ? '+' : '';
+  let html = '<div class="summary"><strong>' + total + trunc + '</strong> match' + (total===1?'':'es') + ' in DxDatabook</div>';
+
+  // Chips per group
+  html += '<div class="chips-row">' + ordered.map(g =>
+    '<span class="src-chip">' + escapeHtml(g.name) + ' <span class="n">' + g.rows.length + '</span></span>'
+  ).join('') + '</div>';
+
+  // Tables -- open the biggest group, collapse the rest.
+  html += '<div class="groups">' + ordered.map((g, i) => groupTable(g, i === 0 && ordered.length === 1)).join('') + '</div>';
+  return html;
+}
+
+function formatReply(j) {
+  // Direct answer mode: server short-circuited the DB lookup and gave us
+  // a Copilot-style prose reply. Render as a clean text bubble (no SQL,
+  // no rows table, no interpretation chip).
+  if (j && j.mode === 'answer') {
+    return '<div class="text answer">' + escapeHtml(j.reply || '') + '</div>';
+  }
+
+  // Parse optional [interpretation] prefix the agent prepends.
+  let interp = '';
+  let body = j.reply || '';
+  const m = body.match(/^\[([^\]]+)\]\s*\n?/);
+  if (m) { interp = m[1]; }
+
+  let html = '';
+  if (interp) html += '<div class="interp">' + escapeHtml(interp) + '</div>';
+  html += renderResults(j);
+  if (j.datasheetNote) {
+    // Convert plain URLs in the note to clickable links, otherwise escape.
+    const safe = escapeHtml(j.datasheetNote).replace(
+      /(https?:\/\/[^\s<]+)/g,
+      '<a href="$1" target="_blank" rel="noopener">$1</a>'
+    );
+    html += '<div class="ds-note"><div class="ds-note-head">Datasheet hint</div>'
+          + '<div class="ds-note-body">' + safe + '</div></div>';
+  }
+  if (j.sql) html += '<details class="sql-det"><summary>SQL</summary><code>' + escapeHtml(j.sql) + '</code></details>';
+  return html;
+}
+
+async function checkHealth() {
+  const pill = document.getElementById('health');
+  const txt  = document.getElementById('healthText');
+  const userPill = document.getElementById('userPill');
+  const llmPill  = document.getElementById('llmPill');
+  try {
+    const r = await fetch(AGENT + '/health', { cache:'no-store' });
+    if (!r.ok) throw new Error();
+    const j = await r.json();
+    pill.classList.add('ok');
+    txt.textContent = 'Agent connected';
+    userPill.style.display = 'inline-flex';
+    userPill.textContent = j.user;
+    llmPill.style.display = 'inline-flex';
+    llmPill.classList.remove('ok','warn');
+    if (j.llmEnabled) {
+      llmPill.textContent = j.llmModel || 'LLM on';
+      llmPill.classList.add('ok');
+      llmPill.title = 'LLM probe OK at ' + (j.llmCheckedAt || '');
+    } else if (j.llmConfigured) {
+      llmPill.textContent = 'LLM error';
+      llmPill.classList.add('warn');
+      llmPill.title = (j.llmError || 'Token configured but probe failed') + ' — renew at github.com/settings/personal-access-tokens';
+    } else {
+      llmPill.textContent = 'rules-only';
+      llmPill.title = 'No GitHub token. Add agent\\.env with GITHUB_TOKEN=... to route queries through Copilot.';
+    }
+    input.disabled = false; sendBtn.disabled = false;
+    healthFailCount = 0;
+    hideAgentDown();
+    return true;
+  } catch (e) {
+    pill.classList.remove('ok');
+    txt.textContent = 'Agent not running';
+    input.disabled = true; sendBtn.disabled = true;
+    healthFailCount = (healthFailCount || 0) + 1;
+    if (healthFailCount >= 2) showAgentDown();
+    return false;
+  }
+}
+
+let healthFailCount = 0;
+const overlay = document.getElementById('agentDown');
+function showAgentDown(){ overlay.classList.add('show'); }
+function hideAgentDown(){ overlay.classList.remove('show'); }
+
+document.getElementById('retryHealth').onclick = function(){ checkHealth(); };
+function copyToClipboard(text, toastId){
+  navigator.clipboard.writeText(text).then(function(){
+    const t = document.getElementById(toastId);
+    if (!t) return;
+    t.classList.add('show');
+    setTimeout(function(){ t.classList.remove('show'); }, 1500);
+  });
+}
+document.getElementById('copyCmd').onclick = function(){
+  copyToClipboard(document.getElementById('launchCmd').textContent, 'copyToast');
+};
+document.getElementById('copyPath').onclick = function(){
+  copyToClipboard(document.getElementById('sharePath').textContent, 'copyPathToast');
+};
+
+async function ask(text) {
+  main.classList.add('has-chat');
+  addUserMsg(text);
+  // Record user turn in the active conversation NOW (so history sent to the
+  // backend already reflects prior turns, not including this one).
+  const userTurn = { role: 'user', content: text, ts: Date.now() };
+
+  const placeholder = addBotMsg('<div class="text" style="color:var(--fg-mut);"><i>Searching DxDatabook…</i></div>');
+
+  const refineEl = document.getElementById('refineToggle');
+  const refining = !!(refineEl && refineEl.checked && lastUserQuery);
+  const payload = {
+    message: text,
+    mode: refining ? 'refine' : 'fresh',
+    history: (activeConv ? activeConv.turns : []).map(function(t){
+      return { role: t.role, content: t.contentForLlm || t.content };
+    })
+  };
+  if (refining) payload.previousQuery = lastUserQuery;
+
+  // Push the user turn into the active conv AFTER building payload history so
+  // the LLM sees only prior context, not the current message.
+  ensureActiveConversation(text);
+  activeConv.turns.push(userTurn);
+  activeConv.updatedAt = Date.now();
+  if (activeConv.turns.length === 1) {
+    // First user message becomes the title.
+    activeConv.title = text.length > 60 ? text.slice(0, 57) + '…' : text;
+    renderSidebar();
+    document.getElementById('chatTitle').textContent = activeConv.title;
+  }
+
+  try {
+    const r = await fetch(AGENT + '/chat', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const j = await r.json();
+    let inner;
+    if (j.error) {
+      inner = '<div class="text"><span class="err">Error: ' + escapeHtml(j.error) + '</span></div>';
+    } else {
+      inner = formatReply(j);
+    }
+    placeholder.querySelector('.body').innerHTML = inner;
+    if (j.parsedBy) {
+      const m = document.createElement('div');
+      m.className = 'meta';
+      m.textContent = 'parsed by: ' + j.parsedBy
+        + (j.llmError ? ' • LLM error: ' + j.llmError : '')
+        + (j.truncated ? ' • result truncated' : '');
+      placeholder.appendChild(m);
+    }
+    scrollToEnd();
+
+    // Persist the assistant turn so the next /chat can include it as context.
+    // We store a compact text summary for the LLM (not the entire rows table).
+    activeConv.turns.push({
+      role: 'assistant',
+      ts: Date.now(),
+      // The visible bubble HTML is regenerated from `serverJson` on restore.
+      serverJson: j,
+      contentForLlm: buildAssistantContext(j)
+    });
+    saveConversations();
+  } catch (e) {
+    placeholder.querySelector('.body').innerHTML = '<div class="text"><span class="err">Network error: ' + escapeHtml(e.message) + '</span></div>';
+    activeConv.turns.push({ role: 'assistant', ts: Date.now(), error: e.message });
+    saveConversations();
+  }
+}
+
+// Build a short text summary of an assistant response so the LLM can refer
+// back to it in follow-ups without us shipping the entire rows table.
+function buildAssistantContext(j) {
+  if (!j) return '(no reply)';
+  if (j.error) return 'Error: ' + j.error;
+  if (j.mode === 'answer') return String(j.reply || '');
+  const rows = j.rows || [];
+  if (rows.length === 0) return 'No matches.';
+  const groups = {};
+  rows.forEach(function(r){
+    const k = r._source || 'results';
+    groups[k] = (groups[k] || 0) + 1;
+  });
+  const summary = Object.keys(groups).map(function(k){ return k + '=' + groups[k]; }).join(', ');
+  const samples = rows.slice(0, 6).map(function(r){
+    return [r.IGTPartNo, r.Description].filter(Boolean).join(' | ');
+  }).join('\n');
+  return 'Returned ' + rows.length + ' rows (' + summary + ').\nSample part numbers:\n' + samples;
+}
+
+function send() {
+  const t = input.value.trim();
+  if (!t) return;
+  input.value = '';
+  autosize();
+  ask(t);
+  lastUserQuery = t;
+  const refineEl = document.getElementById('refineToggle');
+  const refineLabel = document.getElementById('refineLabel');
+  if (refineEl) {
+    refineEl.checked = false;
+    refineEl.disabled = false;
+    refineLabel.classList.remove('disabled','active');
+  }
+}
+sendBtn.onclick = send;
+input.addEventListener('keydown', function(e){
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+
+// Suggestion chips
+function wireSuggestionChips() {
+  document.querySelectorAll('.chip').forEach(function(c){
+    if (c._wired) return;
+    c._wired = true;
+    c.addEventListener('click', function(){
+      if (input.disabled) return;
+      input.value = c.dataset.q;
+      autosize();
+      send();
+    });
+  });
+}
+wireSuggestionChips();
+
+let lastUserQuery = '';
+document.getElementById('refineToggle').addEventListener('change', function(){
+  const lbl = document.getElementById('refineLabel');
+  if (this.checked) lbl.classList.add('active'); else lbl.classList.remove('active');
+});
+
+// ====================================================================
+// Conversation state + sidebar (ChatGPT-style multi-turn history)
+// ====================================================================
+const STORE_KEY  = 'databook_conversations_v1';
+const ACTIVE_KEY = 'databook_active_conv_v1';
+let conversations = [];   // [{ id, title, createdAt, updatedAt, turns:[{role,content|serverJson,...}] }]
+let activeConv   = null;
+
+function newConvId() { return 'c_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,7); }
+
+function loadConversations() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    conversations = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(conversations)) conversations = [];
+  } catch (e) { conversations = []; }
+  const activeId = localStorage.getItem(ACTIVE_KEY);
+  if (activeId) activeConv = conversations.find(function(c){ return c.id === activeId; }) || null;
+}
+
+function saveConversations() {
+  try {
+    // Keep at most 50 conversations to keep storage bounded.
+    conversations.sort(function(a,b){ return (b.updatedAt||0) - (a.updatedAt||0); });
+    if (conversations.length > 50) conversations = conversations.slice(0, 50);
+    localStorage.setItem(STORE_KEY, JSON.stringify(conversations));
+    if (activeConv) localStorage.setItem(ACTIVE_KEY, activeConv.id);
+  } catch (e) { /* quota - ignore */ }
+  renderSidebar();
+}
+
+function ensureActiveConversation(firstText) {
+  if (activeConv) return activeConv;
+  activeConv = {
+    id: newConvId(),
+    title: firstText ? (firstText.length > 60 ? firstText.slice(0,57)+'…' : firstText) : 'New chat',
+    createdAt: Date.now(), updatedAt: Date.now(),
+    turns: []
+  };
+  conversations.unshift(activeConv);
+  saveConversations();
+  return activeConv;
+}
+
+function newChat() {
+  activeConv = null;
+  localStorage.removeItem(ACTIVE_KEY);
+  lastUserQuery = '';
+  // Clear the chat area and show welcome screen again.
+  main.classList.remove('has-chat');
+  document.getElementById('chatTitle').textContent = 'New chat';
+  clearTranscript(true);
+  renderSidebar();
+}
+
+function loadConversation(id) {
+  const c = conversations.find(function(x){ return x.id === id; });
+  if (!c) return;
+  activeConv = c;
+  localStorage.setItem(ACTIVE_KEY, c.id);
+  document.getElementById('chatTitle').textContent = c.title || 'Chat';
+  // Re-render transcript
+  clearTranscript(false);
+  main.classList.add('has-chat');
+  c.turns.forEach(function(t){
+    if (t.role === 'user') {
+      addUserMsg(t.content);
+    } else if (t.role === 'assistant') {
+      let html;
+      if (t.error) html = '<div class="text"><span class="err">Network error: ' + escapeHtml(t.error) + '</span></div>';
+      else if (t.serverJson && t.serverJson.error) html = '<div class="text"><span class="err">Error: ' + escapeHtml(t.serverJson.error) + '</span></div>';
+      else html = formatReply(t.serverJson || {});
+      const node = addBotMsg(html);
+      if (t.serverJson && t.serverJson.parsedBy) {
+        const m = document.createElement('div');
+        m.className = 'meta';
+        m.textContent = 'parsed by: ' + t.serverJson.parsedBy;
+        node.appendChild(m);
+      }
+    }
+  });
+  // last user query for refine toggle
+  for (let i = c.turns.length - 1; i >= 0; i--) {
+    if (c.turns[i].role === 'user') { lastUserQuery = c.turns[i].content; break; }
+  }
+  renderSidebar();
+  scrollToEnd();
+  // Close sidebar on mobile
+  document.getElementById('sidebar').classList.remove('open');
+}
+
+function deleteConversation(id, ev) {
+  if (ev) ev.stopPropagation();
+  const idx = conversations.findIndex(function(c){ return c.id === id; });
+  if (idx < 0) return;
+  conversations.splice(idx, 1);
+  if (activeConv && activeConv.id === id) {
+    activeConv = null;
+    newChat();
+  }
+  saveConversations();
+}
+
+function renderSidebar() {
+  const host = document.getElementById('sbItems');
+  if (!host) return;
+  if (conversations.length === 0) {
+    host.innerHTML = '<div class="text muted" style="padding:8px 6px;font-size:12px;">No conversations yet.</div>';
+    return;
+  }
+  const sorted = conversations.slice().sort(function(a,b){ return (b.updatedAt||0) - (a.updatedAt||0); });
+  host.innerHTML = sorted.map(function(c){
+    const active = activeConv && activeConv.id === c.id;
+    return '<div class="sb-item' + (active ? ' active' : '') + '" data-id="' + c.id + '" title="' + escapeHtml(c.title || 'Chat') + '">' +
+             '<span class="title">' + escapeHtml(c.title || 'Chat') + '</span>' +
+             '<button class="del" data-del="' + c.id + '" title="Delete conversation">×</button>' +
+           '</div>';
+  }).join('');
+  host.querySelectorAll('.sb-item').forEach(function(el){
+    el.addEventListener('click', function(){ loadConversation(el.dataset.id); });
+  });
+  host.querySelectorAll('.del').forEach(function(b){
+    b.addEventListener('click', function(ev){ deleteConversation(b.dataset.del, ev); });
+  });
+}
+
+document.getElementById('newChatBtn').onclick = newChat;
+document.getElementById('menuBtn').onclick = function(){
+  document.getElementById('sidebar').classList.toggle('open');
+};
+
+loadConversations();
+if (activeConv) loadConversation(activeConv.id); else renderSidebar();
+
+// ====================================================================
+// Altium / Agile 501 Match panel
+// ====================================================================
+function match501RowTable(rows) {
+  if (!rows || rows.length === 0) return '<div class="text muted" style="font-size:12px;">No DxDatabook cross-reference found.</div>';
+  const cols = pickColumns(rows);
+  if (cols.length === 0) return '';
+  const head = '<tr>' + cols.map(c => '<th>' + escapeHtml(c) + '</th>').join('') + '</tr>';
+  const body = rows.map(r => '<tr>' + cols.map(c => '<td>' + renderCell(c, r[c]) + '</td>').join('') + '</tr>').join('');
+  return '<div class="table-wrap"><table>' + head + body + '</table></div>';
+}
+
+function renderMatch501(j) {
+  const host = document.getElementById('match501Results');
+  if (!j || !j.matches || j.matches.length === 0) {
+    host.innerHTML = '<div class="text muted">No Altium library rows matched that code.</div>';
+    return;
+  }
+  host.innerHTML = j.matches.map(function(m){
+    return '<details class="grp" open>'
+      + '<summary><span class="grp-name">' + escapeHtml(m.altiumCmpId || '(no CMP_ID)') + ' &mdash; ' + escapeHtml(m.altiumComment || '') + '</span>'
+      + ' <span class="grp-count">' + (m.databookMatchCount || 0) + ' DxDatabook match(es)</span></summary>'
+      + '<div style="padding:8px 2px;font-size:13px;color:var(--fg-soft);">' + escapeHtml(m.altiumDescription || '') + '</div>'
+      + match501RowTable(m.databookMatches)
+      + '</details>';
+  }).join('');
+}
+
+async function runMatch501() {
+  const code = document.getElementById('match501Input').value.trim();
+  const host = document.getElementById('match501Results');
+  if (!code) { host.innerHTML = '<div class="text err">Enter a code first.</div>'; return; }
+  host.innerHTML = '<div class="text muted"><i>Matching against Altium library + DxDatabook…</i></div>';
+  try {
+    const r = await fetch(AGENT + '/match501?code=' + encodeURIComponent(code));
+    const j = await r.json();
+    if (j.error) { host.innerHTML = '<div class="text err">Error: ' + escapeHtml(j.error) + '</div>'; return; }
+    renderMatch501(j);
+  } catch (e) {
+    host.innerHTML = '<div class="text err">Network error: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+document.getElementById('openMatch501').onclick = function(){
+  document.getElementById('match501Overlay').style.display = 'flex';
+  document.getElementById('match501Input').focus();
+};
+document.getElementById('closeMatch501').onclick = function(){
+  document.getElementById('match501Overlay').style.display = 'none';
+};
+document.getElementById('match501Go').onclick = runMatch501;
+document.getElementById('match501Input').addEventListener('keydown', function(e){
+  if (e.key === 'Enter') { e.preventDefault(); runMatch501(); }
+});
+
+checkHealth();
+setInterval(checkHealth, 10000);
+</script>
+</body>
+</html>
