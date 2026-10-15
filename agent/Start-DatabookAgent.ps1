@@ -82,3 +82,12 @@ Write-Host ""
 
 # Run in-process so the user sees the agent log live.
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $agent
+
+# If the agent exited on its own (crash, startup error) rather than the
+# window being closed/Ctrl+C'd, pause so "Run with PowerShell" doesn't
+# instantly close the window before the error above can be read.
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "[ERROR] Agent exited unexpectedly (code $LASTEXITCODE). See messages above." -ForegroundColor Red
+    Read-Host "Press Enter to close this window"
+}
